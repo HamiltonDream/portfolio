@@ -148,6 +148,18 @@ export default function Portfolio() {
   const [suckingIn, setSuckingIn] = useState<string | null>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const [previewRect, setPreviewRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  /* ── Performance tier: detect device capability ── */
+  const [isMobile, setIsMobile] = useState(false);
+  const perfTierRef = useRef<"high" | "mid" | "low">("high");
+  useEffect(() => {
+    const mobile = window.innerWidth < 768 || /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+    setIsMobile(mobile);
+    const cores = navigator.hardwareConcurrency || 2;
+    const mem = (navigator as unknown as { deviceMemory?: number }).deviceMemory || 4;
+    if (mobile || cores <= 2 || mem <= 2) perfTierRef.current = "low";
+    else if (cores <= 4 || mem <= 4) perfTierRef.current = "mid";
+    else perfTierRef.current = "high";
+  }, []);
   /* Idle state machine: walking → stopping → idle → restarting → walking */
   type IdleState = "walking" | "stopping" | "idle" | "restarting";
   const [idleState, setIdleState] = useState<IdleState>("idle");
@@ -287,7 +299,9 @@ export default function Portfolio() {
   /* Size canvases to viewport (capped DPR for performance) */
   useEffect(() => {
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const tier = perfTierRef.current;
+      const maxDpr = tier === "low" ? 1 : tier === "mid" ? 1.5 : 2;
+      const dpr = Math.min(window.devicePixelRatio || 1, maxDpr);
       const w = window.innerWidth;
       const h = window.innerHeight;
       [canvasRef.current, particleCanvasRef.current, fogCanvasRef.current].forEach(c => {
@@ -398,7 +412,7 @@ export default function Portfolio() {
       }
     };
 
-    /* Draw video to canvas — "contain" scaling, bottom-aligned
+    /* Draw video to canvas — "cover" scaling, bottom-aligned, character always fills viewport height.
        IMPORTANT: No clearRect here — drawImage fully overpaints the same rect
        since all videos are 1920×1080. This prevents black flash on buffer swaps. */
     const CHAR_CENTER_FRAC = 0.5;
@@ -408,11 +422,13 @@ export default function Portfolio() {
       const ch = canvas.height;
       const vw = vid.videoWidth || 1;
       const vh = vid.videoHeight || 1;
-      const scale = Math.min(cw / vw, ch / vh);
+      /* "Cover" mode: scale so the video always fills the viewport height at minimum.
+         This ensures the character is always visible regardless of aspect ratio. */
+      const scale = Math.max(cw / vw, ch / vh);
       const dw = vw * scale;
       const dh = vh * scale;
       const dx = (cw - dw) / 2;
-      const dy = ch - dh;
+      const dy = ch - dh; /* bottom-aligned */
       if (flip) {
         const charScreenX = dx + CHAR_CENTER_FRAC * vw * scale;
         ctx.save();
@@ -427,29 +443,31 @@ export default function Portfolio() {
 
       /* Edge fade: frosted glass effect over edges to hide video bounds */
       const dp = Math.min(window.devicePixelRatio || 1, 2);
-      const edgeW = 100 * dp;
-      const edgeT = 60 * dp;
+      const edgeW = Math.min(120 * dp, cw * 0.12); /* responsive edge width */
+      const edgeT = Math.min(80 * dp, ch * 0.08);
       /* Left edge — soft glass fade */
-      const gL = ctx.createLinearGradient(dx, 0, dx + edgeW, 0);
+      const gL = ctx.createLinearGradient(Math.max(dx, 0), 0, Math.max(dx, 0) + edgeW, 0);
       gL.addColorStop(0, "rgba(0,0,0,0.85)");
       gL.addColorStop(0.5, "rgba(0,0,0,0.3)");
       gL.addColorStop(1, "rgba(0,0,0,0)");
       ctx.fillStyle = gL;
-      ctx.fillRect(dx, dy, edgeW, dh);
+      ctx.fillRect(Math.max(dx, 0), Math.max(dy, 0), edgeW, dh);
       /* Right edge */
-      const gR = ctx.createLinearGradient(dx + dw, 0, dx + dw - edgeW, 0);
+      const rEdge = Math.min(dx + dw, cw);
+      const gR = ctx.createLinearGradient(rEdge, 0, rEdge - edgeW, 0);
       gR.addColorStop(0, "rgba(0,0,0,0.85)");
       gR.addColorStop(0.5, "rgba(0,0,0,0.3)");
       gR.addColorStop(1, "rgba(0,0,0,0)");
       ctx.fillStyle = gR;
-      ctx.fillRect(dx + dw - edgeW, dy, edgeW, dh);
+      ctx.fillRect(rEdge - edgeW, Math.max(dy, 0), edgeW, dh);
       /* Top edge */
-      const gT = ctx.createLinearGradient(0, dy, 0, dy + edgeT);
+      const tEdge = Math.max(dy, 0);
+      const gT = ctx.createLinearGradient(0, tEdge, 0, tEdge + edgeT);
       gT.addColorStop(0, "rgba(0,0,0,0.8)");
       gT.addColorStop(0.5, "rgba(0,0,0,0.25)");
       gT.addColorStop(1, "rgba(0,0,0,0)");
       ctx.fillStyle = gT;
-      ctx.fillRect(dx, dy, dw, edgeT);
+      ctx.fillRect(Math.max(dx, 0), tEdge, dw, edgeT);
     };
 
     /* Track last set playbackRate to avoid thrashing */
@@ -463,7 +481,8 @@ export default function Portfolio() {
       radius: number; opacity: number; phase: number; speed: number;
     };
     const smokePuffs: SmokePuff[] = [];
-    const SMOKE_COUNT = 50;
+    const tier = perfTierRef.current;
+    const SMOKE_COUNT = tier === "low" ? 12 : tier === "mid" ? 25 : 50;
     const spawnSmoke = (): SmokePuff => {
       const fw = fCanvas?.width || 1920;
       const fh = fCanvas?.height || 1080;
@@ -554,7 +573,7 @@ export default function Portfolio() {
         behind: Math.random() < 0.4, /* ~40% of particles go behind */
       };
     };
-    const DUST_COUNT = 80;
+    const DUST_COUNT = tier === "low" ? 15 : tier === "mid" ? 35 : 80;
     for (let i = 0; i < DUST_COUNT; i++) particles.push(spawnDust());
 
     const drawParticles = () => {
@@ -628,9 +647,12 @@ export default function Portfolio() {
     const loop = () => {
       const v = videoRef.current;
 
-      /* ═══ SMOKE + PARTICLES — every frame ═══ */
-      drawSmoke();
-      drawParticles();
+      /* ═══ SMOKE + PARTICLES — throttled on low-end devices ═══ */
+      const skipEffects = tier === "low" && frameCount % 2 !== 0;
+      if (!skipEffects) {
+        drawSmoke();
+        drawParticles();
+      }
 
       /* ═══ IDLE VIDEO STATE: draw idle clips when not walking ═══ */
       const iState = idleStateRef.current;
@@ -983,7 +1005,7 @@ export default function Portfolio() {
         src="/idle-stop.mp4"
         muted
         playsInline
-        preload="auto"
+        preload="metadata"
         style={{ position: "absolute", width: 0, height: 0, opacity: 0, pointerEvents: "none" }}
         onEnded={() => {
           if (idleStateRef.current === "stopping") {
@@ -1077,7 +1099,7 @@ export default function Portfolio() {
         src="/idle-restart.mp4"
         muted
         playsInline
-        preload="auto"
+        preload="metadata"
         style={{ position: "absolute", width: 0, height: 0, opacity: 0, pointerEvents: "none" }}
         onEnded={() => {
           idleRestartRef.current?.pause();
@@ -1096,7 +1118,7 @@ export default function Portfolio() {
       {/* ═══ FROSTED GLASS EDGES — blur everything at screen edges ═══ */}
       {/* Left glass edge */}
       <div style={{
-        position: "fixed", top: 0, left: 0, bottom: 0, width: "120px",
+        position: "fixed", top: 0, left: 0, bottom: 0, width: isMobile ? "60px" : "120px",
         zIndex: 8, pointerEvents: "none",
         backdropFilter: "blur(12px) saturate(1.2)",
         WebkitBackdropFilter: "blur(12px) saturate(1.2)",
@@ -1106,7 +1128,7 @@ export default function Portfolio() {
       }} />
       {/* Right glass edge */}
       <div style={{
-        position: "fixed", top: 0, right: 0, bottom: 0, width: "120px",
+        position: "fixed", top: 0, right: 0, bottom: 0, width: isMobile ? "60px" : "120px",
         zIndex: 8, pointerEvents: "none",
         backdropFilter: "blur(12px) saturate(1.2)",
         WebkitBackdropFilter: "blur(12px) saturate(1.2)",
@@ -1116,7 +1138,7 @@ export default function Portfolio() {
       }} />
       {/* Top glass edge */}
       <div style={{
-        position: "fixed", top: 0, left: 0, right: 0, height: "70px",
+        position: "fixed", top: 0, left: 0, right: 0, height: isMobile ? "40px" : "70px",
         zIndex: 8, pointerEvents: "none",
         backdropFilter: "blur(8px) saturate(1.2)",
         WebkitBackdropFilter: "blur(8px) saturate(1.2)",
@@ -1391,18 +1413,18 @@ export default function Portfolio() {
       <nav style={{
         position: "fixed", top: 0, left: 0, right: 0, zIndex: 60,
         display: "flex", justifyContent: "space-between", alignItems: "center",
-        padding: "24px 40px",
+        padding: isMobile ? "16px 20px" : "24px 40px",
       }}>
         <button
           onClick={() => navTo(0)}
           style={{
             background: "none", border: "none", cursor: "pointer",
-            fontSize: "0.7rem", letterSpacing: "0.5em",
+            fontSize: isMobile ? "0.6rem" : "0.7rem", letterSpacing: "0.5em",
             fontFamily: "var(--font-mono, monospace)",
             color: "rgba(255,255,255,0.5)", fontWeight: 600,
           }}
         >HAMILTON</button>
-        <div style={{ display: "flex", gap: 28, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: isMobile ? 14 : 28, alignItems: "center" }}>
           {[
             { label: "WORK", idx: 1 },
             { label: "MUSIC", idx: 4 },
@@ -1414,7 +1436,7 @@ export default function Portfolio() {
               onClick={() => navTo(idx)}
               style={{
                 background: "none", border: "none", cursor: "pointer",
-                fontSize: "0.55rem", letterSpacing: "0.25em",
+                fontSize: isMobile ? "0.45rem" : "0.55rem", letterSpacing: "0.25em",
                 color: envIdx === idx ? "rgba(255,255,255,0.8)" : "rgba(255,255,255,0.25)",
                 fontFamily: "var(--font-mono, monospace)",
                 transition: "color 0.4s",
@@ -1427,16 +1449,16 @@ export default function Portfolio() {
 
       {/* ═══ SIDE DOTS ═══ */}
       <div style={{
-        position: "fixed", right: 24, top: "50%", transform: "translateY(-50%)",
-        zIndex: 50, display: "flex", flexDirection: "column", gap: 6,
+        position: "fixed", right: isMobile ? 12 : 24, top: "50%", transform: "translateY(-50%)",
+        zIndex: 50, display: "flex", flexDirection: "column", gap: isMobile ? 4 : 6,
       }}>
         {ENVIRONMENTS.map((e, i) => (
           <button
             key={e.id}
             onClick={() => navTo(i)}
             style={{
-              width: envIdx === i ? 24 : 4,
-              height: 4,
+              width: envIdx === i ? (isMobile ? 16 : 24) : (isMobile ? 3 : 4),
+              height: isMobile ? 3 : 4,
               borderRadius: 2,
               background: envIdx === i ? e.color : "rgba(255,255,255,0.12)",
               border: "none", cursor: "pointer", padding: 0,
@@ -1450,7 +1472,7 @@ export default function Portfolio() {
       <div style={{
         position: "fixed", inset: 0, zIndex: 10, pointerEvents: "none",
         display: "flex", alignItems: "flex-end",
-        padding: "0 40px 120px 40px",
+        padding: isMobile ? "0 20px 80px 20px" : "0 40px 120px 40px",
       }}>
         <AnimatePresence mode="wait">
           <motion.div
@@ -1459,7 +1481,7 @@ export default function Portfolio() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -40 }}
             transition={{ duration: 0.7, ease }}
-            style={{ maxWidth: 600, pointerEvents: "auto" }}
+            style={{ maxWidth: isMobile ? "100%" : 600, pointerEvents: "auto" }}
           >
             {/* Number watermark */}
             {"num" in env && env.num && (
@@ -1603,8 +1625,8 @@ export default function Portfolio() {
       {/* ═══ AUTO-WALK CONTROLS — persistent bottom-right (not on intro) ═══ */}
       {env.id !== "intro" && <div style={{
         position: "fixed",
-        bottom: 40,
-        right: 40,
+        bottom: isMobile ? 20 : 40,
+        right: isMobile ? 20 : 40,
         zIndex: 50,
         display: "flex",
         alignItems: "center",
@@ -1658,7 +1680,7 @@ export default function Portfolio() {
 
       {/* ═══ PROJECT PREVIEW — fixed right side, cinematic transitions ═══ */}
       <AnimatePresence mode="wait">
-        {"previewUrl" in env && env.previewUrl && !isSuckingIn && (
+        {"previewUrl" in env && env.previewUrl && !isSuckingIn && !isMobile && (
             <motion.div
               ref={previewRef}
               key={`preview-${env.id}`}
