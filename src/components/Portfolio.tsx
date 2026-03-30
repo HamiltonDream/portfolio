@@ -131,6 +131,8 @@ const ease = [0.25, 0.46, 0.45, 0.94] as const;
 export default function Portfolio() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const particleCanvasRef = useRef<HTMLCanvasElement>(null);
+  const fogCanvasRef = useRef<HTMLCanvasElement>(null);
   const [videoReady, setVideoReady] = useState(false);
   const [videoDuration, setVideoDuration] = useState(0);
   const [progress, setProgress] = useState(0);
@@ -139,6 +141,8 @@ export default function Portfolio() {
   const currentTimeRef = useRef(0);
   const [autoWalk, setAutoWalk] = useState(false);
   const autoWalkRef = useRef(false);
+  const autoWalkDirRef = useRef<1 | -1>(1);
+  const [autoWalkDir, setAutoWalkDir] = useState<1 | -1>(1);
   const progressRef = useRef(0);
   const lastPaintedTime = useRef(-1);
   const [suckingIn, setSuckingIn] = useState<string | null>(null);
@@ -152,22 +156,30 @@ export default function Portfolio() {
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idleStopRef = useRef<HTMLVideoElement>(null);
   const idleLoopRef = useRef<HTMLVideoElement>(null);
+  const idleLoopBRef = useRef<HTMLVideoElement>(null);
+  const idleLoopActiveRef = useRef<"A" | "B">("A");
   const idleRestartRef = useRef<HTMLVideoElement>(null);
+  /* Lightning flash states for cinematic idle transitions */
+  const [showLightningFlash, setShowLightningFlash] = useState(false);
+  const [showWakeFlash, setShowWakeFlash] = useState(false);
+  const [showLoopFlash, setShowLoopFlash] = useState(false);
   /* Walk animation time — always advances forward regardless of scroll direction */
   const walkTimeRef = useRef(0);
   /* Accumulated scroll velocity — drives walk playback rate for smooth animation */
   const scrollVelocityRef = useRef(0);
   /* Track scroll direction: 1 = forward (right), -1 = backward (left) */
   const scrollDirRef = useRef(1);
+  /* Auto-snap: set when a light flick should glide to next section */
+  const autoSnapTargetRef = useRef<number | null>(null);
   /* ─── Cinematic Camera System ─── */
   const cameraScale = useMotionValue(1);
   const cameraX = useMotionValue(0);
   const cameraY = useMotionValue(0);
   const cameraRotate = useMotionValue(0);
-  const smoothScale = useSpring(cameraScale, { stiffness: 80, damping: 20, mass: 0.8 });
-  const smoothX = useSpring(cameraX, { stiffness: 60, damping: 18, mass: 0.6 });
-  const smoothY = useSpring(cameraY, { stiffness: 60, damping: 18, mass: 0.6 });
-  const smoothRotate = useSpring(cameraRotate, { stiffness: 70, damping: 22, mass: 0.5 });
+  const smoothScale = useSpring(cameraScale, { stiffness: 120, damping: 18, mass: 0.5 });
+  const smoothX = useSpring(cameraX, { stiffness: 100, damping: 16, mass: 0.4 });
+  const smoothY = useSpring(cameraY, { stiffness: 100, damping: 16, mass: 0.4 });
+  const smoothRotate = useSpring(cameraRotate, { stiffness: 110, damping: 18, mass: 0.35 });
   const lastEnvRef = useRef(0);
   const mouseX = useMotionValue(0);
   const mouseY = useMotionValue(0);
@@ -179,8 +191,11 @@ export default function Portfolio() {
   /* Mark active on scroll — triggers restart transition if idle */
   const startIdleTimer = useCallback(() => {
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    /* Don't go idle during auto-walk */
+    if (autoWalkRef.current) return;
     idleTimerRef.current = setTimeout(() => {
       if (idleStateRef.current !== "walking") return;
+      if (autoWalkRef.current) return;
       const sv = idleStopRef.current;
       if (sv) {
         sv.currentTime = 0;
@@ -188,11 +203,11 @@ export default function Portfolio() {
       }
       idleStateRef.current = "stopping";
       setIdleState("stopping");
-      /* Camera: pull back when entering idle */
-      cameraScale.set(0.97);
-      cameraY.set(8);
-      setTimeout(() => { cameraScale.set(1); cameraY.set(0); }, 200);
-    }, 500);
+      /* Camera: fluid pull-back when entering idle */
+      cameraScale.set(0.98);
+      cameraY.set(5);
+      setTimeout(() => { cameraScale.set(1); cameraY.set(0); }, 150);
+    }, 600);
   }, [cameraScale, cameraY]);
 
   const markActive = useCallback(() => {
@@ -200,9 +215,10 @@ export default function Portfolio() {
     hasScrolledRef.current = true;
 
     const state = idleStateRef.current;
-    if (state === "idle" || state === "stopping") {
-      idleStopRef.current?.pause();
+    if (state === "idle") {
+      /* Fully idle — play the restart animation */
       idleLoopRef.current?.pause();
+      idleLoopBRef.current?.pause();
       const rv = idleRestartRef.current;
       if (rv) {
         rv.currentTime = 0;
@@ -210,14 +226,39 @@ export default function Portfolio() {
       }
       idleStateRef.current = "restarting";
       setIdleState("restarting");
-      /* Camera: punch in when restarting walk */
+      /* Camera: dramatic punch on wake-up */
+      cameraScale.set(1.05);
+      cameraRotate.set(scrollDirRef.current * -0.8);
+      cameraX.set(scrollDirRef.current * -10);
+      setTimeout(() => { cameraScale.set(1); cameraRotate.set(0); cameraX.set(0); }, 300);
+      /* Wake-up flash to mask color transition back */
+      setShowWakeFlash(true);
+      setTimeout(() => setShowWakeFlash(false), 350);
+    } else if (state === "stopping") {
+      /* Character already turning — play restart from matching point */
+      const sv = idleStopRef.current;
+      const rv = idleRestartRef.current;
+      let turnProgress = 0;
+      if (sv && sv.duration) {
+        turnProgress = Math.min(sv.currentTime / sv.duration, 1);
+      }
+      sv?.pause();
+      if (rv) {
+        const restartStart = (1 - turnProgress) * (rv.duration || 0);
+        rv.currentTime = restartStart;
+        rv.play().catch(() => {});
+      }
+      idleStateRef.current = "restarting";
+      setIdleState("restarting");
       cameraScale.set(1.03);
       cameraRotate.set(scrollDirRef.current * -0.6);
       setTimeout(() => { cameraScale.set(1); cameraRotate.set(0); }, 250);
+    } else if (state === "restarting") {
+      /* Already playing restart — just let it finish */
     } else if (state === "walking") {
       startIdleTimer();
     }
-  }, [startIdleTimer, cameraScale, cameraRotate]);
+  }, [startIdleTimer, cameraScale, cameraRotate, cameraX]);
 
   /* Start idle loop on page load — character faces camera until first scroll */
   useEffect(() => {
@@ -226,6 +267,9 @@ export default function Portfolio() {
       lv.currentTime = 0;
       lv.play().catch(() => {});
     }
+    /* Pre-load buffer B so it's ready for ping-pong */
+    const lvB = idleLoopBRef.current;
+    if (lvB) { lvB.load(); }
   }, []);
 
   /* Try to grab duration from video — multiple strategies */
@@ -240,13 +284,13 @@ export default function Portfolio() {
     }
   }, [videoReady]);
 
-  /* Size canvases to viewport (retina-aware) */
+  /* Size canvases to viewport (capped DPR for performance) */
   useEffect(() => {
     const resize = () => {
-      const dpr = window.devicePixelRatio || 1;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const w = window.innerWidth;
       const h = window.innerHeight;
-      [canvasRef.current].forEach(c => {
+      [canvasRef.current, particleCanvasRef.current, fogCanvasRef.current].forEach(c => {
         if (c) {
           c.width = w * dpr;
           c.height = h * dpr;
@@ -280,8 +324,9 @@ export default function Portfolio() {
       if (delta !== 0) scrollDirRef.current = delta > 0 ? 1 : -1;
       targetTimeRef.current += delta;
       targetTimeRef.current = ((targetTimeRef.current % videoDuration) + videoDuration) % videoDuration;
-      /* Accumulate scroll velocity for smooth walk playback */
       scrollVelocityRef.current += Math.abs(delta);
+      /* Cancel any auto-snap when user actively scrolls */
+      autoSnapTargetRef.current = null;
     };
 
     let touchY = 0;
@@ -296,6 +341,7 @@ export default function Portfolio() {
       targetTimeRef.current += delta;
       targetTimeRef.current = ((targetTimeRef.current % videoDuration) + videoDuration) % videoDuration;
       scrollVelocityRef.current += Math.abs(delta);
+      autoSnapTargetRef.current = null;
     };
 
     window.addEventListener("wheel", onWheel, { passive: false });
@@ -308,16 +354,15 @@ export default function Portfolio() {
     };
   }, [videoDuration, markActive]);
 
-  /* ─── Render loop: canvas-based, seek-safe ─── */
+  /* ─── Render loop: canvas-based, optimized ─── */
   useEffect(() => {
     let frameCount = 0;
-    let isSeeking = false;
 
     const video = videoRef.current;
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d", { alpha: true }) || null;
 
-    /* Offscreen canvas for transition fallback — only written right before idle or during idle */
+    /* Single offscreen canvas for snapshot persistence across transitions */
     let snapshotCanvas: HTMLCanvasElement | null = null;
     let snapshotCtx: CanvasRenderingContext2D | null = null;
     let hasSnapshot = false;
@@ -338,9 +383,10 @@ export default function Portfolio() {
     };
 
     const saveSnapshot = () => {
-      if (!canvas) return;
+      if (!canvas || !ctx) return;
       ensureSnapshotCanvas();
       if (snapshotCtx) {
+        snapshotCtx.clearRect(0, 0, snapshotCanvas!.width, snapshotCanvas!.height);
         snapshotCtx.drawImage(canvas, 0, 0);
         hasSnapshot = true;
       }
@@ -352,24 +398,22 @@ export default function Portfolio() {
       }
     };
 
-    /* Draw video to canvas with "cover" scaling.
-       flip = true → mirror horizontally around the character's center,
-       NOT the canvas center, so position doesn't shift. */
-    const CHAR_CENTER_FRAC = 0.5; // character's x center as fraction of video width — tune if needed
-    const drawCover = (vid: HTMLVideoElement, flip = false) => {
+    /* Draw video to canvas — "contain" scaling, bottom-aligned
+       IMPORTANT: No clearRect here — drawImage fully overpaints the same rect
+       since all videos are 1920×1080. This prevents black flash on buffer swaps. */
+    const CHAR_CENTER_FRAC = 0.5;
+    const drawFrame = (vid: HTMLVideoElement, flip = false) => {
       if (!ctx || !canvas) return;
       const cw = canvas.width;
       const ch = canvas.height;
       const vw = vid.videoWidth || 1;
       const vh = vid.videoHeight || 1;
-      const scale = Math.max(cw / vw, ch / vh);
+      const scale = Math.min(cw / vw, ch / vh);
       const dw = vw * scale;
       const dh = vh * scale;
       const dx = (cw - dw) / 2;
-      const dy = (ch - dh) / 2;
-      ctx.clearRect(0, 0, cw, ch);
+      const dy = ch - dh;
       if (flip) {
-        /* Flip around the character's screen-space center so they stay put */
         const charScreenX = dx + CHAR_CENTER_FRAC * vw * scale;
         ctx.save();
         ctx.translate(charScreenX, 0);
@@ -380,112 +424,368 @@ export default function Portfolio() {
       } else {
         ctx.drawImage(vid, dx, dy, dw, dh);
       }
+
+      /* Edge fade: frosted glass effect over edges to hide video bounds */
+      const dp = Math.min(window.devicePixelRatio || 1, 2);
+      const edgeW = 100 * dp;
+      const edgeT = 60 * dp;
+      /* Left edge — soft glass fade */
+      const gL = ctx.createLinearGradient(dx, 0, dx + edgeW, 0);
+      gL.addColorStop(0, "rgba(0,0,0,0.85)");
+      gL.addColorStop(0.5, "rgba(0,0,0,0.3)");
+      gL.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = gL;
+      ctx.fillRect(dx, dy, edgeW, dh);
+      /* Right edge */
+      const gR = ctx.createLinearGradient(dx + dw, 0, dx + dw - edgeW, 0);
+      gR.addColorStop(0, "rgba(0,0,0,0.85)");
+      gR.addColorStop(0.5, "rgba(0,0,0,0.3)");
+      gR.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = gR;
+      ctx.fillRect(dx + dw - edgeW, dy, edgeW, dh);
+      /* Top edge */
+      const gT = ctx.createLinearGradient(0, dy, 0, dy + edgeT);
+      gT.addColorStop(0, "rgba(0,0,0,0.8)");
+      gT.addColorStop(0.5, "rgba(0,0,0,0.25)");
+      gT.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = gT;
+      ctx.fillRect(dx, dy, dw, edgeT);
     };
 
-    const onSeeked = () => {
-      isSeeking = false;
-      if (!video) return;
-      drawCover(video, scrollDirRef.current < 0);
-      lastPaintedTime.current = video.currentTime;
-      saveSnapshot();
+    /* Track last set playbackRate to avoid thrashing */
+    let lastRate = 1.0;
+
+    /* ═══ CANVAS SMOKE FOG SYSTEM ═══ */
+    const fCanvas = fogCanvasRef.current;
+    const fCtx = fCanvas?.getContext("2d", { alpha: true }) || null;
+    type SmokePuff = {
+      x: number; y: number; vx: number; vy: number;
+      radius: number; opacity: number; phase: number; speed: number;
+    };
+    const smokePuffs: SmokePuff[] = [];
+    const SMOKE_COUNT = 50;
+    const spawnSmoke = (): SmokePuff => {
+      const fw = fCanvas?.width || 1920;
+      const fh = fCanvas?.height || 1080;
+      return {
+        x: Math.random() * fw * 1.4 - fw * 0.2,
+        y: fh * (0.6 + Math.random() * 0.45),
+        vx: (Math.random() - 0.5) * 0.4,
+        vy: -(Math.random() * 0.2 + 0.02),
+        radius: 80 + Math.random() * 250,
+        opacity: 0.04 + Math.random() * 0.09,
+        phase: Math.random() * Math.PI * 2,
+        speed: 0.003 + Math.random() * 0.006,
+      };
+    };
+    for (let i = 0; i < SMOKE_COUNT; i++) smokePuffs.push(spawnSmoke());
+
+    const drawSmoke = () => {
+      if (!fCtx || !fCanvas) return;
+      const fw = fCanvas.width;
+      const fh = fCanvas.height;
+      fCtx.clearRect(0, 0, fw, fh);
+
+      for (const s of smokePuffs) {
+        s.phase += s.speed;
+        /* Slow organic drift */
+        s.x += s.vx + Math.sin(s.phase) * 0.3;
+        s.y += s.vy + Math.cos(s.phase * 0.7) * 0.1;
+
+        /* Wrap horizontally */
+        if (s.x < -s.radius * 2) s.x = fw + s.radius;
+        if (s.x > fw + s.radius * 2) s.x = -s.radius;
+        /* Reset if drifted too high */
+        if (s.y < fh * 0.3) {
+          s.y = fh * (0.75 + Math.random() * 0.3);
+          s.x = Math.random() * fw * 1.4 - fw * 0.2;
+        }
+
+        /* Vertical fade: denser at bottom, transparent higher up */
+        const vertFade = Math.max(0, (s.y - fh * 0.35) / (fh * 0.65));
+        const a = s.opacity * vertFade;
+        if (a < 0.001) continue;
+
+        /* Soft radial gradient puff */
+        const grad = fCtx.createRadialGradient(s.x, s.y, 0, s.x, s.y, s.radius);
+        grad.addColorStop(0, `rgba(18,18,28,${(a * 1.2).toFixed(4)})`);
+        grad.addColorStop(0.3, `rgba(15,15,25,${(a * 0.8).toFixed(4)})`);
+        grad.addColorStop(0.6, `rgba(12,12,22,${(a * 0.35).toFixed(4)})`);
+        grad.addColorStop(1, "rgba(10,10,20,0)");
+        fCtx.beginPath();
+        fCtx.arc(s.x, s.y, s.radius, 0, Math.PI * 2);
+        fCtx.fillStyle = grad;
+        fCtx.fill();
+      }
+
+      /* Dense ground layer — solid fog bank at very bottom */
+      const groundGrad = fCtx.createLinearGradient(0, fh, 0, fh * 0.7);
+      groundGrad.addColorStop(0, "rgba(8,8,14,0.9)");
+      groundGrad.addColorStop(0.4, "rgba(12,12,22,0.45)");
+      groundGrad.addColorStop(0.7, "rgba(16,16,28,0.15)");
+      groundGrad.addColorStop(1, "rgba(20,20,30,0)");
+      fCtx.fillStyle = groundGrad;
+      fCtx.fillRect(-10, fh * 0.7, fw + 20, fh * 0.3 + 10);
     };
 
-    if (video) {
-      video.addEventListener("seeked", onSeeked);
-    }
+    /* ═══ FLOATING DUST PARTICLE SYSTEM ═══ */
+    const pCanvas = particleCanvasRef.current;
+    const pCtx = pCanvas?.getContext("2d", { alpha: true }) || null;
+    type DustParticle = {
+      x: number; y: number; vx: number; vy: number;
+      size: number; opacity: number; life: number; maxLife: number;
+      behind: boolean; /* true = this particle passes behind the character */
+    };
+    const particles: DustParticle[] = [];
+    let particleFade = 1; /* 0 = fully hidden (idle), 1 = fully visible (walking) */
+
+    const spawnDust = (): DustParticle => {
+      const pw = pCanvas?.width || 1920;
+      const ph = pCanvas?.height || 1080;
+      const life = Math.random() * 10 + 6;
+      return {
+        x: Math.random() * pw,
+        y: Math.random() * ph,
+        vx: (Math.random() - 0.5) * 0.6,
+        vy: -(Math.random() * 0.35 + 0.1),
+        size: Math.random() * 2.5 + 0.8,
+        opacity: Math.random() * 0.45 + 0.15,
+        life, maxLife: life,
+        behind: Math.random() < 0.4, /* ~40% of particles go behind */
+      };
+    };
+    const DUST_COUNT = 80;
+    for (let i = 0; i < DUST_COUNT; i++) particles.push(spawnDust());
+
+    const drawParticles = () => {
+      if (!pCtx || !pCanvas) return;
+      const pw = pCanvas.width;
+      const ph = pCanvas.height;
+      pCtx.clearRect(0, 0, pw, ph);
+
+      /* Smooth fade: lerp toward 0 when idle, 1 when walking */
+      const isIdle = idleStateRef.current !== "walking";
+      const fadeTarget = isIdle ? 0 : 1;
+      particleFade += (fadeTarget - particleFade) * 0.03;
+      if (particleFade < 0.005 && isIdle) { particleFade = 0; return; }
+
+      /* Replenish while visible */
+      if (!isIdle) { while (particles.length < DUST_COUNT) particles.push(spawnDust()); }
+
+      const vel = scrollVelocityRef.current;
+      const dir = scrollDirRef.current;
+
+      /* Character body zone — center of screen, roughly where the model stands */
+      const charCenterX = pw * 0.5;
+      const charHalfW = pw * 0.08; /* ~16% of screen width = character body */
+      const charTop = ph * 0.15;   /* character starts near top of screen */
+      const charBottom = ph * 0.85; /* down to near bottom */
+
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.life -= 0.016;
+        if (p.life <= 0) { particles.splice(i, 1); continue; }
+
+        /* Scroll parallax drift */
+        p.vx -= vel * dir * 0.3;
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vx *= 0.997;
+        p.vx += (Math.random() - 0.5) * 0.015;
+        p.vy += (Math.random() - 0.5) * 0.008;
+
+        if (p.x < -20) p.x = pw + 20;
+        if (p.x > pw + 20) p.x = -20;
+        if (p.y < -20) p.y = ph + 20;
+        if (p.y > ph + 20) p.y = -20;
+
+        /* "Behind" particles: skip drawing when inside character silhouette zone,
+           they'll naturally drift out the other side and reappear */
+        if (p.behind && p.y > charTop && p.y < charBottom) {
+          const dx = Math.abs(p.x - charCenterX);
+          if (dx < charHalfW) continue; /* invisible — looks like it went behind him */
+        }
+
+        const t = p.life / p.maxLife;
+        const lifeFade = t < 0.15 ? t / 0.15 : t > 0.8 ? (1 - t) / 0.2 : 1;
+        const a = lifeFade * p.opacity * particleFade;
+        if (a < 0.001) continue;
+
+        /* Soft glow halo */
+        pCtx.beginPath();
+        pCtx.arc(p.x, p.y, p.size * 4, 0, Math.PI * 2);
+        pCtx.fillStyle = `rgba(255,255,255,${(a * 0.08).toFixed(4)})`;
+        pCtx.fill();
+
+        /* Core dot */
+        pCtx.beginPath();
+        pCtx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        pCtx.fillStyle = `rgba(255,255,255,${a.toFixed(4)})`;
+        pCtx.fill();
+      }
+    };
 
     const loop = () => {
       const v = videoRef.current;
 
+      /* ═══ SMOKE + PARTICLES — every frame ═══ */
+      drawSmoke();
+      drawParticles();
+
       /* ═══ IDLE VIDEO STATE: draw idle clips when not walking ═══ */
       const iState = idleStateRef.current;
       if (iState !== "walking") {
+        const activeLoop = idleLoopActiveRef.current === "A" ? idleLoopRef.current : idleLoopBRef.current;
+        const fallbackLoop = idleLoopActiveRef.current === "A" ? idleLoopBRef.current : idleLoopRef.current;
         const idleVid =
           iState === "stopping" ? idleStopRef.current :
-          iState === "idle" ? idleLoopRef.current :
+          iState === "idle" ? activeLoop :
           iState === "restarting" ? idleRestartRef.current : null;
 
-        /* Play-once freeze for idle loop */
-        if (iState === "idle" && idleVid && idleVid.duration && idleVid.currentTime >= idleVid.duration - 0.25) {
-          idleVid.pause();
-        }
-
-        const vidReady = idleVid && idleVid.readyState >= 2;
         const flipIdle = scrollDirRef.current < 0;
 
-        if (vidReady) {
-          drawCover(idleVid!, flipIdle);
-          saveSnapshot();
-        } else if (hasSnapshot) {
-          restoreSnapshot();
+        /* Draw from active buffer; if it's not ready, try fallback.
+           Canvas NEVER clears — worst case keeps showing the last good frame. */
+        if (iState === "idle") {
+          if (idleVid && idleVid.readyState >= 2 && idleVid.currentTime > 0.04) {
+            drawFrame(idleVid, flipIdle);
+          } else if (fallbackLoop && fallbackLoop.readyState >= 2) {
+            drawFrame(fallbackLoop, flipIdle);
+          }
+        } else if (idleVid && idleVid.readyState >= 2) {
+          drawFrame(idleVid, flipIdle);
         }
-        /* else: initial page load, no snapshot, canvas stays transparent (black = transparent via screen blend) */
 
-        /* Keep currentTimeRef tracking so there's no jump when walking resumes */
+        /* Keep section tracking in sync */
         if (videoDuration > 0) {
           currentTimeRef.current = targetTimeRef.current;
           progressRef.current = currentTimeRef.current / videoDuration;
           frameCount++;
           if (frameCount % 6 === 0) setProgress(progressRef.current);
         }
-        isSeeking = false;
         rafRef.current = requestAnimationFrame(loop);
         return;
+      }
+
+      /* Save snapshot on transition from idle to walking (once) */
+      if (!hasSnapshot && ctx && canvas) {
+        saveSnapshot();
       }
 
       /* ═══ WALKING STATE ═══ */
       if (v && videoDuration > 0) {
         if (autoWalkRef.current) {
-          /* Auto-walk: video plays naturally, sections crawl */
-          if (v.paused) {
-            v.playbackRate = 1.0;
-            v.play().catch(() => {});
-          }
-          if (Math.abs(v.currentTime - lastPaintedTime.current) > 0.01) {
-            drawCover(v, scrollDirRef.current < 0);
+          if (v.paused) { v.playbackRate = 1.0; v.play().catch(() => {}); }
+          if (v.readyState >= 2 && v.currentTime !== lastPaintedTime.current) {
+            drawFrame(v, scrollDirRef.current < 0);
             lastPaintedTime.current = v.currentTime;
-            saveSnapshot();
           }
-          const sectionSpeed = 0.0003;
-          currentTimeRef.current += sectionSpeed * videoDuration;
-          currentTimeRef.current = currentTimeRef.current % videoDuration;
+          const sectionSpeed = 0.0006;
+          const dir = autoWalkDirRef.current;
+          scrollDirRef.current = dir;
+          currentTimeRef.current += dir * sectionSpeed * videoDuration;
+          currentTimeRef.current = ((currentTimeRef.current % videoDuration) + videoDuration) % videoDuration;
           targetTimeRef.current = currentTimeRef.current;
 
+          /* Update progress every frame during auto-walk so camera kicks sync */
+          progressRef.current = currentTimeRef.current / videoDuration;
+          setProgress(progressRef.current);
         } else {
-          /* Scroll mode: velocity-driven playback for smooth walk */
-
-          /* Section progress: lerp toward scroll target */
+          /* ── Section progress: smooth lerp toward target ── */
           let diff = targetTimeRef.current - currentTimeRef.current;
           if (diff > videoDuration / 2) diff -= videoDuration;
           if (diff < -videoDuration / 2) diff += videoDuration;
-          currentTimeRef.current += diff * 0.3;
-          currentTimeRef.current = ((currentTimeRef.current % videoDuration) + videoDuration) % videoDuration;
 
-          /* Walk animation: play at speed proportional to scroll velocity */
-          const vel = scrollVelocityRef.current;
-          scrollVelocityRef.current *= 0.85; /* decay each frame */
-          const rate = Math.min(vel * 25, 3); /* scale to playback rate, cap at 3× */
-          if (rate > 0.07) {
-            v.playbackRate = Math.max(rate, 0.25);
-            if (v.paused) v.play().catch(() => {});
+          /* ── Auto-snap: detect when velocity dies, glide to next section ── */
+          if (autoSnapTargetRef.current !== null) {
+            let snapDiff = autoSnapTargetRef.current - currentTimeRef.current;
+            if (snapDiff > videoDuration / 2) snapDiff -= videoDuration;
+            if (snapDiff < -videoDuration / 2) snapDiff += videoDuration;
+            const absDiff = Math.abs(snapDiff);
+            if (absDiff > 0.005) {
+              /* Smooth ease-out: lerp factor gives fluid deceleration.
+                 Larger factor = faster start, natural slow-down at end. */
+              const lerp = 0.09;
+              currentTimeRef.current += snapDiff * lerp;
+              currentTimeRef.current = ((currentTimeRef.current % videoDuration) + videoDuration) % videoDuration;
+              targetTimeRef.current = autoSnapTargetRef.current;
+
+              /* Match auto-walk: play at 1× for smooth frame delivery */
+              if (v.paused) { v.playbackRate = 1.0; v.play().catch(() => {}); }
+              else if (Math.abs(v.playbackRate - 1.0) > 0.05) { v.playbackRate = 1.0; lastRate = 1.0; }
+
+              /* Draw every decoded frame */
+              if (v.readyState >= 2 && v.currentTime !== lastPaintedTime.current) {
+                drawFrame(v, scrollDirRef.current < 0);
+                lastPaintedTime.current = v.currentTime;
+              }
+
+              /* Update progress every frame during snap for fluid transitions */
+              progressRef.current = currentTimeRef.current / videoDuration;
+              setProgress(progressRef.current);
+            } else {
+              /* Arrived — clean stop */
+              currentTimeRef.current = autoSnapTargetRef.current;
+              targetTimeRef.current = autoSnapTargetRef.current;
+              autoSnapTargetRef.current = null;
+              scrollVelocityRef.current = 0;
+              if (!v.paused) v.pause();
+            }
           } else {
-            scrollVelocityRef.current = 0;
-            if (!v.paused) v.pause();
-          }
+            /* ── Normal scroll behavior ── */
+            currentTimeRef.current += diff * 0.15;
+            currentTimeRef.current = ((currentTimeRef.current % videoDuration) + videoDuration) % videoDuration;
 
-          /* Paint the latest decoded frame */
-          if (v.readyState >= 2 && Math.abs(v.currentTime - lastPaintedTime.current) > 0.005) {
-            drawCover(v, scrollDirRef.current < 0);
-            lastPaintedTime.current = v.currentTime;
-            saveSnapshot();
+            /* Trigger snap when natural scroll velocity dies */
+            if (scrollVelocityRef.current < 0.03 && scrollVelocityRef.current > 0) {
+              const dir = scrollDirRef.current;
+              const curProg = currentTimeRef.current / videoDuration;
+              const curIdx = getEnvIndex(curProg);
+              const slice = 1 / ENV_COUNT;
+              const localProg = (curProg - curIdx * slice) / slice;
+              /* Snap forward if past 30% of section, else back to current center */
+              let snapIdx: number;
+              if (dir > 0 && localProg > 0.3) {
+                snapIdx = (curIdx + 1) % ENV_COUNT;
+              } else if (dir < 0 && localProg < 0.7) {
+                snapIdx = (curIdx - 1 + ENV_COUNT) % ENV_COUNT;
+              } else {
+                snapIdx = curIdx;
+              }
+              const snapTime = (snapIdx + 0.5) / ENV_COUNT * videoDuration;
+              autoSnapTargetRef.current = snapTime;
+              targetTimeRef.current = snapTime;
+              scrollVelocityRef.current = 0;
+            }
+
+            /* Walk video: velocity-driven playback rate */
+            const vel = scrollVelocityRef.current;
+            scrollVelocityRef.current *= 0.92;
+            const targetRate = Math.min(vel * 20, 2.5);
+
+            if (targetRate > 0.05) {
+              const clampedRate = Math.max(targetRate, 0.2);
+              if (Math.abs(clampedRate - lastRate) > 0.08 || v.paused) {
+                v.playbackRate = clampedRate;
+                lastRate = clampedRate;
+              }
+              if (v.paused) v.play().catch(() => {});
+            } else {
+              scrollVelocityRef.current = 0;
+              if (!v.paused) v.pause();
+            }
+
+            /* Paint only on new video frames */
+            if (v.readyState >= 2 && v.currentTime !== lastPaintedTime.current) {
+              drawFrame(v, scrollDirRef.current < 0);
+              lastPaintedTime.current = v.currentTime;
+            }
           }
         }
 
         progressRef.current = currentTimeRef.current / videoDuration;
         frameCount++;
-        if (frameCount % 6 === 0) {
-          setProgress(progressRef.current);
-        }
+        if (frameCount % 6 === 0) setProgress(progressRef.current);
       }
 
       rafRef.current = requestAnimationFrame(loop);
@@ -493,9 +793,6 @@ export default function Portfolio() {
     rafRef.current = requestAnimationFrame(loop);
     return () => {
       cancelAnimationFrame(rafRef.current);
-      if (video) {
-        video.removeEventListener("seeked", onSeeked);
-      }
       snapshotCanvas = null;
       snapshotCtx = null;
     };
@@ -507,21 +804,27 @@ export default function Portfolio() {
   const nextEnv = ENVIRONMENTS[blend.next];
   const envIdx = blend.current;
 
-  /* Camera kick on environment change */
+  /* Camera kick on environment change — delayed to sync with content entrance */
   useEffect(() => {
     if (lastEnvRef.current !== envIdx) {
       const dir = envIdx > lastEnvRef.current ? 1 : -1;
-      cameraScale.set(1.04);
-      cameraX.set(dir * -20);
-      cameraRotate.set(dir * -0.8);
-      cameraY.set(-5);
-      setTimeout(() => {
-        cameraScale.set(1);
-        cameraX.set(0);
-        cameraRotate.set(0);
-        cameraY.set(0);
-      }, 100);
       lastEnvRef.current = envIdx;
+      /* Wait for AnimatePresence exit/enter to start, then punch.
+         First section (intro→fieldops) fires faster since intro has no heavy exit. */
+      const delay = envIdx <= 1 ? 300 : 700;
+      const kickTimer = setTimeout(() => {
+        cameraScale.set(1.04);
+        cameraX.set(dir * -20);
+        cameraRotate.set(dir * -0.8);
+        cameraY.set(-5);
+        setTimeout(() => {
+          cameraScale.set(1);
+          cameraX.set(0);
+          cameraRotate.set(0);
+          cameraY.set(0);
+        }, 100);
+      }, delay);
+      return () => clearTimeout(kickTimer);
     }
   }, [envIdx, cameraScale, cameraX, cameraRotate, cameraY]);
 
@@ -534,9 +837,15 @@ export default function Portfolio() {
   /* Keep ref in sync with state */
   useEffect(() => { autoWalkRef.current = autoWalk; }, [autoWalk]);
 
-  /* Stop auto-walk on manual scroll */
+  /* Stop auto-walk on manual scroll — immediate ref sync + idle trigger */
   useEffect(() => {
-    const stop = () => { if (autoWalkRef.current) setAutoWalk(false); };
+    const stop = () => {
+      if (autoWalkRef.current) {
+        autoWalkRef.current = false;
+        setAutoWalk(false);
+        /* Don't idle here — user is actively scrolling, markActive handles timer */
+      }
+    };
     window.addEventListener("wheel", stop, { passive: true });
     window.addEventListener("touchstart", stop, { passive: true });
     return () => { window.removeEventListener("wheel", stop); window.removeEventListener("touchstart", stop); };
@@ -556,8 +865,69 @@ export default function Portfolio() {
   }, [videoDuration]);
 
   const toggleAutoWalk = useCallback(() => {
-    setAutoWalk(prev => !prev);
-  }, []);
+    setAutoWalk(prev => {
+      const next = !prev;
+      /* Sync ref IMMEDIATELY so the render loop sees it this frame */
+      autoWalkRef.current = next;
+      if (next) {
+        /* When turning on auto-walk, use the proper transition to wake from idle */
+        if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+        const state = idleStateRef.current;
+        if (state === "idle") {
+          /* Play restart animation — same as markActive for idle state */
+          idleLoopRef.current?.pause();
+          idleLoopBRef.current?.pause();
+          const rv = idleRestartRef.current;
+          if (rv) { rv.currentTime = 0; rv.play().catch(() => {}); }
+          idleStateRef.current = "restarting";
+          setIdleState("restarting");
+          cameraScale.set(1.05);
+          cameraRotate.set(-0.8);
+          cameraX.set(-10);
+          setTimeout(() => { cameraScale.set(1); cameraRotate.set(0); cameraX.set(0); }, 300);
+          setShowWakeFlash(true);
+          setTimeout(() => setShowWakeFlash(false), 350);
+        } else if (state === "stopping") {
+          /* Interrupt stop with time-matched restart */
+          const sv = idleStopRef.current;
+          const rv = idleRestartRef.current;
+          let turnProgress = 0;
+          if (sv && sv.duration) { turnProgress = Math.min(sv.currentTime / sv.duration, 1); }
+          sv?.pause();
+          if (rv) { rv.currentTime = (1 - turnProgress) * (rv.duration || 0); rv.play().catch(() => {}); }
+          idleStateRef.current = "restarting";
+          setIdleState("restarting");
+          cameraScale.set(1.03);
+          cameraRotate.set(-0.6);
+          setTimeout(() => { cameraScale.set(1); cameraRotate.set(0); }, 250);
+        } else if (state === "walking") {
+          /* Already walking — just ensure video is playing */
+          const wv = videoRef.current;
+          if (wv) { wv.playbackRate = 1.0; wv.play().catch(() => {}); }
+        }
+        /* Note: restarting state's onEnded will set walking + start walk video */
+      } else {
+        /* Stopping auto-walk: go to idle-stop immediately, no delay */
+        const wv = videoRef.current;
+        if (wv && !wv.paused) wv.pause();
+        scrollVelocityRef.current = 0;
+        autoSnapTargetRef.current = null;
+        /* Skip the 600ms idle timer — trigger stop animation right now */
+        if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+        const sv = idleStopRef.current;
+        if (sv) {
+          sv.currentTime = 0;
+          sv.play().catch(() => {});
+        }
+        idleStateRef.current = "stopping";
+        setIdleState("stopping");
+        cameraScale.set(0.98);
+        cameraY.set(5);
+        setTimeout(() => { cameraScale.set(1); cameraY.set(0); }, 150);
+      }
+      return next;
+    });
+  }, [cameraScale, cameraY]);
 
   /* ─── Click-to-enter: cinematic camera-zoom transition ─── */
   const handlePreviewClick = useCallback((url: string) => {
@@ -617,10 +987,30 @@ export default function Portfolio() {
         style={{ position: "absolute", width: 0, height: 0, opacity: 0, pointerEvents: "none" }}
         onEnded={() => {
           if (idleStateRef.current === "stopping") {
-            const lv = idleLoopRef.current;
-            if (lv) { lv.currentTime = 0; lv.play().catch(() => {}); }
+            /* Start idle loop on buffer A, pre-prime B */
+            const lvA = idleLoopRef.current;
+            const lvB = idleLoopBRef.current;
+            idleLoopActiveRef.current = "A";
+            if (lvA) { lvA.currentTime = 0; lvA.play().catch(() => {}); }
+            if (lvB) { lvB.currentTime = 0; lvB.pause(); }
             idleStateRef.current = "idle";
             setIdleState("idle");
+            /* ── Cinematic lightning flash to mask color transition ── */
+            setShowLightningFlash(true);
+            cameraScale.set(1.06);
+            cameraX.set((Math.random() - 0.5) * 14);
+            cameraY.set(-8);
+            setTimeout(() => {
+              cameraScale.set(0.98);
+              cameraX.set((Math.random() - 0.5) * 8);
+              cameraY.set(5);
+            }, 80);
+            setTimeout(() => {
+              cameraScale.set(1);
+              cameraX.set(0);
+              cameraY.set(0);
+            }, 280);
+            setTimeout(() => setShowLightningFlash(false), 550);
           }
         }}
       />
@@ -631,6 +1021,56 @@ export default function Portfolio() {
         playsInline
         preload="auto"
         style={{ position: "absolute", width: 0, height: 0, opacity: 0, pointerEvents: "none" }}
+        onTimeUpdate={() => {
+          const a = idleLoopRef.current;
+          if (a && a.duration && idleStateRef.current === "idle") {
+            const timeLeft = a.duration - a.currentTime;
+            /* Pre-prime buffer B 0.3s before end */
+            if (timeLeft <= 0.3 && timeLeft > 0.05) {
+              const b = idleLoopBRef.current;
+              if (b && (b.paused || b.currentTime > 0.5)) {
+                b.currentTime = 0;
+                b.play().catch(() => {});
+              }
+            }
+          }
+        }}
+        onEnded={() => {
+          if (idleStateRef.current === "idle") {
+            idleLoopActiveRef.current = "B";
+            /* Flash overlay to mask any remaining transition artifacts */
+            setShowLoopFlash(true);
+            setTimeout(() => setShowLoopFlash(false), 200);
+          }
+        }}
+      />
+      <video
+        ref={idleLoopBRef}
+        src="/idle-loop.mp4"
+        muted
+        playsInline
+        preload="auto"
+        style={{ position: "absolute", width: 0, height: 0, opacity: 0, pointerEvents: "none" }}
+        onTimeUpdate={() => {
+          const b = idleLoopBRef.current;
+          if (b && b.duration && idleStateRef.current === "idle") {
+            const timeLeft = b.duration - b.currentTime;
+            if (timeLeft <= 0.3 && timeLeft > 0.05) {
+              const a = idleLoopRef.current;
+              if (a && (a.paused || a.currentTime > 0.5)) {
+                a.currentTime = 0;
+                a.play().catch(() => {});
+              }
+            }
+          }
+        }}
+        onEnded={() => {
+          if (idleStateRef.current === "idle") {
+            idleLoopActiveRef.current = "A";
+            setShowLoopFlash(true);
+            setTimeout(() => setShowLoopFlash(false), 200);
+          }
+        }}
       />
       <video
         ref={idleRestartRef}
@@ -644,12 +1084,46 @@ export default function Portfolio() {
           const wv = videoRef.current;
           if (wv) {
             wv.currentTime = currentTimeRef.current;
+            wv.playbackRate = 1.0;
+            wv.play().catch(() => {});
           }
           idleStateRef.current = "walking";
           setIdleState("walking");
           startIdleTimer();
         }}
       />
+
+      {/* ═══ FROSTED GLASS EDGES — blur everything at screen edges ═══ */}
+      {/* Left glass edge */}
+      <div style={{
+        position: "fixed", top: 0, left: 0, bottom: 0, width: "120px",
+        zIndex: 8, pointerEvents: "none",
+        backdropFilter: "blur(12px) saturate(1.2)",
+        WebkitBackdropFilter: "blur(12px) saturate(1.2)",
+        background: "linear-gradient(to right, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 40%, transparent 100%)",
+        maskImage: "linear-gradient(to right, black 0%, black 30%, transparent 100%)",
+        WebkitMaskImage: "linear-gradient(to right, black 0%, black 30%, transparent 100%)",
+      }} />
+      {/* Right glass edge */}
+      <div style={{
+        position: "fixed", top: 0, right: 0, bottom: 0, width: "120px",
+        zIndex: 8, pointerEvents: "none",
+        backdropFilter: "blur(12px) saturate(1.2)",
+        WebkitBackdropFilter: "blur(12px) saturate(1.2)",
+        background: "linear-gradient(to left, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 40%, transparent 100%)",
+        maskImage: "linear-gradient(to left, black 0%, black 30%, transparent 100%)",
+        WebkitMaskImage: "linear-gradient(to left, black 0%, black 30%, transparent 100%)",
+      }} />
+      {/* Top glass edge */}
+      <div style={{
+        position: "fixed", top: 0, left: 0, right: 0, height: "70px",
+        zIndex: 8, pointerEvents: "none",
+        backdropFilter: "blur(8px) saturate(1.2)",
+        WebkitBackdropFilter: "blur(8px) saturate(1.2)",
+        background: "linear-gradient(to bottom, rgba(255,255,255,0.04) 0%, transparent 100%)",
+        maskImage: "linear-gradient(to bottom, black 0%, black 20%, transparent 100%)",
+        WebkitMaskImage: "linear-gradient(to bottom, black 0%, black 20%, transparent 100%)",
+      }} />
 
       {/* ═══ CANVAS (character — blend-mode makes black transparent) ═══ */}
       <canvas
@@ -659,8 +1133,177 @@ export default function Portfolio() {
           zIndex: 5,
           mixBlendMode: "screen",
           pointerEvents: "none",
+          willChange: "transform",
         }}
       />
+
+      {/* ═══ PARTICLE CANVAS — floating dust motes ═══ */}
+      <canvas
+        ref={particleCanvasRef}
+        style={{
+          position: "fixed", inset: 0,
+          zIndex: 6,
+          mixBlendMode: "screen",
+          pointerEvents: "none",
+        }}
+      />
+
+      {/* ═══ SMOKE FOG CANVAS — organic smoke rising from bottom ═══ */}
+      <canvas
+        ref={fogCanvasRef}
+        style={{
+          position: "fixed", inset: 0,
+          zIndex: 6,
+          pointerEvents: "none",
+        }}
+      />
+
+      {/* ═══ LIGHTNING FLASH — cinematic idle transition mask ═══ */}
+      <AnimatePresence>
+        {showLightningFlash && (
+          <motion.div
+            key="lightning-flash"
+            initial={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            style={{
+              position: "fixed", inset: 0, zIndex: 7,
+              pointerEvents: "none", overflow: "hidden",
+            }}
+          >
+            {/* Main white flash — fast strike, quick decay */}
+            <motion.div
+              animate={{ opacity: [0, 1, 0.65, 0.08, 0] }}
+              transition={{ duration: 0.45, times: [0, 0.06, 0.12, 0.4, 1], ease: "easeOut" }}
+              style={{
+                position: "absolute", inset: 0,
+                background: "radial-gradient(ellipse at 50% 55%, #fff 0%, rgba(220,230,255,0.85) 25%, rgba(180,200,255,0.35) 55%, transparent 85%)",
+              }}
+            />
+            {/* Secondary flash — delayed double-strike for realism */}
+            <motion.div
+              animate={{ opacity: [0, 0, 0.55, 0.15, 0] }}
+              transition={{ duration: 0.45, times: [0, 0.14, 0.2, 0.4, 1], ease: "easeOut" }}
+              style={{
+                position: "absolute", inset: 0,
+                background: "radial-gradient(ellipse at 42% 48%, rgba(255,255,255,0.8) 0%, transparent 45%)",
+              }}
+            />
+            {/* Lightning streak lines — diagonal energy cracks */}
+            <motion.div
+              animate={{ opacity: [0, 0.7, 0.4, 0], x: ["-3%", "0%", "1%", "3%"] }}
+              transition={{ duration: 0.3, ease: "easeOut" }}
+              style={{
+                position: "absolute", inset: 0,
+                background: `
+                  linear-gradient(72deg, transparent 29%, rgba(255,255,255,0.18) 29.8%, rgba(255,255,255,0.06) 30.2%, transparent 30.6%),
+                  linear-gradient(105deg, transparent 44%, rgba(255,255,255,0.12) 44.5%, transparent 45%),
+                  linear-gradient(82deg, transparent 59%, rgba(200,220,255,0.14) 59.3%, rgba(200,220,255,0.04) 59.7%, transparent 60.1%),
+                  linear-gradient(118deg, transparent 66%, rgba(255,255,255,0.08) 66.3%, transparent 66.6%)
+                `,
+              }}
+            />
+            {/* Horizontal anamorphic flare streak */}
+            <motion.div
+              animate={{ opacity: [0, 0.6, 0.25, 0], scaleX: [0.6, 1.5, 2.5, 3.5] }}
+              transition={{ duration: 0.5, ease: "easeOut" }}
+              style={{
+                position: "absolute",
+                top: "49%", left: "-25%", right: "-25%",
+                height: 2,
+                background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.5), rgba(255,255,255,0.85), rgba(255,255,255,0.5), transparent)",
+                filter: "blur(1.5px)",
+                transformOrigin: "center center",
+              }}
+            />
+            {/* Diffused wide glow band */}
+            <motion.div
+              animate={{ opacity: [0, 0.35, 0.12, 0] }}
+              transition={{ duration: 0.55, times: [0, 0.1, 0.4, 1], ease: "easeOut" }}
+              style={{
+                position: "absolute",
+                top: "42%", left: "-10%", right: "-10%",
+                height: 80,
+                background: "linear-gradient(90deg, transparent, rgba(200,215,255,0.15), rgba(255,255,255,0.25), rgba(200,215,255,0.15), transparent)",
+                filter: "blur(18px)",
+              }}
+            />
+            {/* Afterglow — lingering tinted haze */}
+            <motion.div
+              animate={{ opacity: [0, 0, 0.2, 0.08, 0] }}
+              transition={{ duration: 0.55, times: [0, 0.15, 0.25, 0.55, 1], ease: "easeOut" }}
+              style={{
+                position: "absolute", inset: 0,
+                background: `radial-gradient(ellipse at 50% 55%, ${blendedColor}15 0%, transparent 55%)`,
+              }}
+            />
+            {/* Film grain overlay during flash */}
+            <motion.div
+              animate={{ opacity: [0, 0.05, 0.02, 0] }}
+              transition={{ duration: 0.4, ease: "easeOut" }}
+              style={{
+                position: "absolute", inset: 0,
+                mixBlendMode: "overlay",
+                backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`,
+                backgroundSize: "150px 150px",
+              }}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ═══ WAKE FLASH — exit idle cinematic punch ═══ */}
+      <AnimatePresence>
+        {showWakeFlash && (
+          <motion.div
+            key="wake-flash"
+            initial={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            style={{
+              position: "fixed", inset: 0, zIndex: 7,
+              pointerEvents: "none",
+            }}
+          >
+            {/* Quick bright radial punch */}
+            <motion.div
+              animate={{ opacity: [0, 0.65, 0.15, 0] }}
+              transition={{ duration: 0.3, times: [0, 0.1, 0.35, 1], ease: "easeOut" }}
+              style={{
+                position: "absolute", inset: 0,
+                background: "radial-gradient(ellipse at 50% 55%, rgba(255,255,255,0.8) 0%, rgba(210,220,255,0.35) 30%, transparent 65%)",
+              }}
+            />
+            {/* Directional motion streak */}
+            <motion.div
+              animate={{ opacity: [0, 0.4, 0], x: ["0%", "4%"] }}
+              transition={{ duration: 0.25, ease: "easeOut" }}
+              style={{
+                position: "absolute", inset: 0,
+                background: "linear-gradient(95deg, transparent 15%, rgba(255,255,255,0.1) 45%, rgba(255,255,255,0.06) 55%, transparent 85%)",
+              }}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ═══ IDLE LOOP FLASH — masks buffer swap at loop point ═══ */}
+      <AnimatePresence>
+        {showLoopFlash && (
+          <motion.div
+            key="loop-flash"
+            initial={{ opacity: 0.5 }}
+            animate={{ opacity: 0 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+            style={{
+              position: "fixed", inset: 0, zIndex: 7,
+              pointerEvents: "none",
+              background: "radial-gradient(ellipse at 50% 60%, rgba(255,255,255,0.35) 0%, rgba(200,210,230,0.12) 35%, transparent 60%)",
+            }}
+          />
+        )}
+      </AnimatePresence>
 
       {/* ═══ ENVIRONMENT COLOR OVERLAY — crossfades between worlds ═══ */}
       <div style={{
@@ -695,6 +1338,39 @@ export default function Portfolio() {
         position: "fixed", top: 0, left: 0, right: 0, height: "25%",
         zIndex: 2, pointerEvents: "none",
         background: "linear-gradient(to bottom, rgba(0,0,0,0.5) 0%, transparent 100%)",
+      }} />
+
+
+      {/* Volumetric light shaft — diagonal from upper right */}
+      <motion.div
+        animate={{ opacity: [0.03, 0.08, 0.03] }}
+        transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
+        style={{
+          position: "fixed", inset: 0,
+          zIndex: 3, pointerEvents: "none",
+          background: "linear-gradient(135deg, transparent 20%, rgba(255,255,255,0.02) 40%, rgba(255,255,255,0.04) 50%, rgba(255,255,255,0.02) 60%, transparent 80%)",
+          transform: "skewX(-15deg)",
+        }}
+      />
+      {/* Atmospheric haze — tinted with environment color */}
+      <motion.div
+        animate={{ opacity: [0.015, 0.04, 0.015] }}
+        transition={{ duration: 12, repeat: Infinity, ease: "easeInOut" }}
+        style={{
+          position: "fixed", inset: 0,
+          zIndex: 8, pointerEvents: "none",
+          background: `radial-gradient(ellipse at 50% 70%, ${blendedColor}08 0%, transparent 60%)`,
+          transition: "background 1.5s ease",
+        }}
+      />
+      {/* Persistent film grain */}
+      <div style={{
+        position: "fixed", inset: 0,
+        zIndex: 8, pointerEvents: "none",
+        mixBlendMode: "overlay",
+        opacity: 0.03,
+        backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`,
+        backgroundSize: "200px 200px",
       }} />
 
       {/* ═══ PROGRESS BAR ═══ */}
@@ -748,31 +1424,6 @@ export default function Portfolio() {
           ))}
         </div>
       </nav>
-
-      {/* ═══ ENVIRONMENT LABEL — left side, vertical ═══ */}
-      <div style={{
-        position: "fixed", left: 40, top: "50%", transform: "translateY(-50%) rotate(-90deg)",
-        zIndex: 30, pointerEvents: "none",
-        transformOrigin: "center center",
-      }}>
-        <AnimatePresence mode="wait">
-          <motion.span
-            key={env.id}
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 0.15, x: 0 }}
-            exit={{ opacity: 0, x: 20 }}
-            transition={{ duration: 0.6, ease }}
-            style={{
-              fontSize: "0.6rem",
-              letterSpacing: "0.5em",
-              color: env.color,
-              fontFamily: "var(--font-mono, monospace)",
-              fontWeight: 600,
-              whiteSpace: "nowrap",
-            }}
-          >{env.label}</motion.span>
-        </AnimatePresence>
-      </div>
 
       {/* ═══ SIDE DOTS ═══ */}
       <div style={{
@@ -914,7 +1565,7 @@ export default function Portfolio() {
               </div>
             )}
 
-            {/* Intro scroll hint */}
+            {/* Intro auto-walk */}
             {env.id === "intro" && (
               <div style={{ marginTop: 40, display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 16 }}>
                 <button
@@ -934,20 +1585,76 @@ export default function Portfolio() {
                   }}
                 >{autoWalk ? "■ STOP" : "▶ AUTO WALK"}</button>
                 <motion.p
-                  animate={{ opacity: [0.15, 0.4, 0.15] }}
+                  animate={{ opacity: [0.35, 0.7, 0.35] }}
                   transition={{ duration: 3, repeat: Infinity }}
                   style={{
-                    fontSize: "0.5rem",
+                    fontSize: "0.55rem",
                     letterSpacing: "0.4em",
-                    color: "rgba(255,255,255,0.15)",
+                    color: "rgba(255,255,255,0.5)",
                     fontFamily: "var(--font-mono, monospace)",
                   }}
-                >OR SCROLL TO WALK ↓</motion.p>
+                >SCROLL TO WALK ↓</motion.p>
               </div>
             )}
           </motion.div>
         </AnimatePresence>
       </div>
+
+      {/* ═══ AUTO-WALK CONTROLS — persistent bottom-right (not on intro) ═══ */}
+      {env.id !== "intro" && <div style={{
+        position: "fixed",
+        bottom: 40,
+        right: 40,
+        zIndex: 50,
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        pointerEvents: "auto",
+      }}>
+        {/* Reverse direction */}
+        {autoWalk && (
+          <button
+            onClick={() => {
+              const next = autoWalkDirRef.current === 1 ? -1 : 1;
+              autoWalkDirRef.current = next as 1 | -1;
+              setAutoWalkDir(next as 1 | -1);
+              scrollDirRef.current = next;
+            }}
+            style={{
+              width: 36, height: 36,
+              borderRadius: "50%",
+              background: "rgba(255,255,255,0.06)",
+              border: "1px solid rgba(255,255,255,0.15)",
+              color: "rgba(255,255,255,0.6)",
+              fontSize: "0.7rem",
+              cursor: "pointer",
+              transition: "all 0.3s",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              backdropFilter: "blur(12px)",
+              transform: autoWalkDir === -1 ? "scaleX(-1)" : "none",
+            }}
+            title={autoWalkDir === 1 ? "Reverse" : "Forward"}
+          >↻</button>
+        )}
+        {/* Play / Stop */}
+        <button
+          onClick={toggleAutoWalk}
+          style={{
+            padding: "10px 22px",
+            borderRadius: 999,
+            background: autoWalk ? "rgba(255,255,255,0.08)" : "transparent",
+            border: `1px solid ${autoWalk ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.08)"}`,
+            color: autoWalk ? "rgba(255,255,255,0.7)" : "rgba(255,255,255,0.25)",
+            fontSize: "0.5rem",
+            fontFamily: "var(--font-mono, monospace)",
+            letterSpacing: "0.2em",
+            cursor: "pointer",
+            transition: "all 0.4s",
+            backdropFilter: "blur(12px)",
+            display: "flex", alignItems: "center", gap: 8,
+          }}
+        >{autoWalk ? "■ STOP" : "▶ AUTO WALK"}</button>
+      </div>}
 
       {/* ═══ PROJECT PREVIEW — fixed right side, cinematic transitions ═══ */}
       <AnimatePresence mode="wait">
@@ -1380,42 +2087,6 @@ export default function Portfolio() {
           </motion.div>
         )}
       </AnimatePresence>
-
-      {/* ═══ FLOATING ENVIRONMENT INDICATOR — bottom right ═══ */}
-      <div style={{
-        position: "fixed", bottom: 30, right: 40, zIndex: 30,
-        pointerEvents: "none",
-      }}>
-        {env.id !== "music" && (
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={env.id}
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.9 }}
-              transition={{ duration: 0.5 }}
-              style={{
-                display: "flex", alignItems: "center", gap: 8,
-                padding: "8px 16px",
-                borderRadius: 999,
-                background: "rgba(0,0,0,0.5)",
-                backdropFilter: "blur(12px)",
-                border: `1px solid ${env.color}15`,
-              }}
-            >
-              <div style={{
-                width: 6, height: 6, borderRadius: "50%",
-                background: env.color, opacity: 0.6,
-              }} />
-              <span style={{
-                fontSize: "0.45rem", letterSpacing: "0.3em",
-                color: "rgba(255,255,255,0.4)",
-                fontFamily: "var(--font-mono, monospace)",
-              }}>{env.label}</span>
-            </motion.div>
-          </AnimatePresence>
-        )}
-      </div>
 
       {/* ═══ SCROLL VELOCITY INDICATOR — subtle motion lines ═══ */}
 
