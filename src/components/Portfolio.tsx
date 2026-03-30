@@ -412,9 +412,9 @@ export default function Portfolio() {
       }
     };
 
-    /* Draw video to canvas — "cover" scaling, bottom-aligned, character always fills viewport height.
-       IMPORTANT: No clearRect here — drawImage fully overpaints the same rect
-       since all videos are 1920×1080. This prevents black flash on buffer swaps. */
+    /* Draw video to canvas — smart scaling that keeps character fully visible on any screen.
+       Uses "cover" for width but caps height overflow so head+feet stay in frame.
+       IMPORTANT: No clearRect — drawImage overpaints the same rect to prevent flash. */
     const CHAR_CENTER_FRAC = 0.5;
     const drawFrame = (vid: HTMLVideoElement, flip = false) => {
       if (!ctx || !canvas) return;
@@ -422,13 +422,21 @@ export default function Portfolio() {
       const ch = canvas.height;
       const vw = vid.videoWidth || 1;
       const vh = vid.videoHeight || 1;
-      /* "Cover" mode: scale so the video always fills the viewport height at minimum.
-         This ensures the character is always visible regardless of aspect ratio. */
-      const scale = Math.max(cw / vw, ch / vh);
+      /* Fit strategy: use whichever scale makes the character fill the screen
+         without losing head or feet. Blend between contain and cover:
+         - Always at least fill the height (character visible)
+         - If video is taller than viewport, vertically center with slight bottom bias
+           so feet stay grounded but head isn't cut off */
+      const containScale = Math.min(cw / vw, ch / vh);
+      const coverScale = Math.max(cw / vw, ch / vh);
+      /* Use 90% of the way toward cover — big character, but don't crop aggressively */
+      const scale = containScale + (coverScale - containScale) * 0.85;
       const dw = vw * scale;
       const dh = vh * scale;
-      const dx = (cw - dw) / 2;
-      const dy = ch - dh; /* bottom-aligned */
+      const dx = (cw - dw) / 2; /* horizontally centered */
+      /* Vertical: if video fits, bottom-align. If overflows, bias 35% from top
+         so head is visible but character stays grounded */
+      const dy = dh <= ch ? (ch - dh) : (ch - dh) * 0.35;
       if (flip) {
         const charScreenX = dx + CHAR_CENTER_FRAC * vw * scale;
         ctx.save();
@@ -630,11 +638,13 @@ export default function Portfolio() {
         const a = lifeFade * p.opacity * particleFade;
         if (a < 0.001) continue;
 
-        /* Soft glow halo */
-        pCtx.beginPath();
-        pCtx.arc(p.x, p.y, p.size * 4, 0, Math.PI * 2);
-        pCtx.fillStyle = `rgba(255,255,255,${(a * 0.08).toFixed(4)})`;
-        pCtx.fill();
+        /* Soft glow halo — skip on low tier (expensive overdraw) */
+        if (tier === "high") {
+          pCtx.beginPath();
+          pCtx.arc(p.x, p.y, p.size * 4, 0, Math.PI * 2);
+          pCtx.fillStyle = `rgba(255,255,255,${(a * 0.08).toFixed(4)})`;
+          pCtx.fill();
+        }
 
         /* Core dot */
         pCtx.beginPath();
@@ -648,8 +658,14 @@ export default function Portfolio() {
       const v = videoRef.current;
 
       /* ═══ SMOKE + PARTICLES — throttled on low-end devices ═══ */
-      const skipEffects = tier === "low" && frameCount % 2 !== 0;
-      if (!skipEffects) {
+      if (tier === "low") {
+        /* Low: skip smoke entirely, particles every 3rd frame */
+        if (frameCount % 3 === 0) drawParticles();
+      } else if (tier === "mid") {
+        /* Mid: smoke every other frame, particles every frame */
+        if (frameCount % 2 === 0) drawSmoke();
+        drawParticles();
+      } else {
         drawSmoke();
         drawParticles();
       }
@@ -1115,14 +1131,13 @@ export default function Portfolio() {
         }}
       />
 
-      {/* ═══ FROSTED GLASS EDGES — blur everything at screen edges ═══ */}
+      {/* ═══ FROSTED GLASS EDGES — blur on high-end only, gradient fallback on others ═══ */}
       {/* Left glass edge */}
       <div style={{
         position: "fixed", top: 0, left: 0, bottom: 0, width: isMobile ? "60px" : "120px",
         zIndex: 8, pointerEvents: "none",
-        backdropFilter: "blur(12px) saturate(1.2)",
-        WebkitBackdropFilter: "blur(12px) saturate(1.2)",
-        background: "linear-gradient(to right, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 40%, transparent 100%)",
+        ...(perfTierRef.current === "high" ? { backdropFilter: "blur(12px) saturate(1.2)", WebkitBackdropFilter: "blur(12px) saturate(1.2)" } : {}),
+        background: "linear-gradient(to right, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.2) 40%, transparent 100%)",
         maskImage: "linear-gradient(to right, black 0%, black 30%, transparent 100%)",
         WebkitMaskImage: "linear-gradient(to right, black 0%, black 30%, transparent 100%)",
       }} />
@@ -1130,9 +1145,8 @@ export default function Portfolio() {
       <div style={{
         position: "fixed", top: 0, right: 0, bottom: 0, width: isMobile ? "60px" : "120px",
         zIndex: 8, pointerEvents: "none",
-        backdropFilter: "blur(12px) saturate(1.2)",
-        WebkitBackdropFilter: "blur(12px) saturate(1.2)",
-        background: "linear-gradient(to left, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 40%, transparent 100%)",
+        ...(perfTierRef.current === "high" ? { backdropFilter: "blur(12px) saturate(1.2)", WebkitBackdropFilter: "blur(12px) saturate(1.2)" } : {}),
+        background: "linear-gradient(to left, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.2) 40%, transparent 100%)",
         maskImage: "linear-gradient(to left, black 0%, black 30%, transparent 100%)",
         WebkitMaskImage: "linear-gradient(to left, black 0%, black 30%, transparent 100%)",
       }} />
@@ -1140,9 +1154,8 @@ export default function Portfolio() {
       <div style={{
         position: "fixed", top: 0, left: 0, right: 0, height: isMobile ? "40px" : "70px",
         zIndex: 8, pointerEvents: "none",
-        backdropFilter: "blur(8px) saturate(1.2)",
-        WebkitBackdropFilter: "blur(8px) saturate(1.2)",
-        background: "linear-gradient(to bottom, rgba(255,255,255,0.04) 0%, transparent 100%)",
+        ...(perfTierRef.current === "high" ? { backdropFilter: "blur(8px) saturate(1.2)", WebkitBackdropFilter: "blur(8px) saturate(1.2)" } : {}),
+        background: "linear-gradient(to bottom, rgba(0,0,0,0.5) 0%, transparent 100%)",
         maskImage: "linear-gradient(to bottom, black 0%, black 20%, transparent 100%)",
         WebkitMaskImage: "linear-gradient(to bottom, black 0%, black 20%, transparent 100%)",
       }} />
@@ -1363,37 +1376,38 @@ export default function Portfolio() {
       }} />
 
 
-      {/* Volumetric light shaft — diagonal from upper right */}
-      <motion.div
-        animate={{ opacity: [0.03, 0.08, 0.03] }}
-        transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
-        style={{
-          position: "fixed", inset: 0,
-          zIndex: 3, pointerEvents: "none",
-          background: "linear-gradient(135deg, transparent 20%, rgba(255,255,255,0.02) 40%, rgba(255,255,255,0.04) 50%, rgba(255,255,255,0.02) 60%, transparent 80%)",
-          transform: "skewX(-15deg)",
-        }}
-      />
-      {/* Atmospheric haze — tinted with environment color */}
-      <motion.div
-        animate={{ opacity: [0.015, 0.04, 0.015] }}
-        transition={{ duration: 12, repeat: Infinity, ease: "easeInOut" }}
-        style={{
-          position: "fixed", inset: 0,
-          zIndex: 8, pointerEvents: "none",
-          background: `radial-gradient(ellipse at 50% 70%, ${blendedColor}08 0%, transparent 60%)`,
-          transition: "background 1.5s ease",
-        }}
-      />
-      {/* Persistent film grain */}
-      <div style={{
+      {/* Volumetric light shaft + atmospheric haze — high/mid only (animated divs) */}
+      {perfTierRef.current !== "low" && <>
+        <motion.div
+          animate={{ opacity: [0.03, 0.08, 0.03] }}
+          transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
+          style={{
+            position: "fixed", inset: 0,
+            zIndex: 3, pointerEvents: "none",
+            background: "linear-gradient(135deg, transparent 20%, rgba(255,255,255,0.02) 40%, rgba(255,255,255,0.04) 50%, rgba(255,255,255,0.02) 60%, transparent 80%)",
+            transform: "skewX(-15deg)",
+          }}
+        />
+        <motion.div
+          animate={{ opacity: [0.015, 0.04, 0.015] }}
+          transition={{ duration: 12, repeat: Infinity, ease: "easeInOut" }}
+          style={{
+            position: "fixed", inset: 0,
+            zIndex: 8, pointerEvents: "none",
+            background: `radial-gradient(ellipse at 50% 70%, ${blendedColor}08 0%, transparent 60%)`,
+            transition: "background 1.5s ease",
+          }}
+        />
+      </>}
+      {/* Persistent film grain — high tier only (SVG filter triggers GPU repaints) */}
+      {perfTierRef.current === "high" && <div style={{
         position: "fixed", inset: 0,
         zIndex: 8, pointerEvents: "none",
         mixBlendMode: "overlay",
         opacity: 0.03,
         backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`,
         backgroundSize: "200px 200px",
-      }} />
+      }} />}
 
       {/* ═══ PROGRESS BAR ═══ */}
       <div style={{
