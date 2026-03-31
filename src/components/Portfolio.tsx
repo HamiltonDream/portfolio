@@ -34,9 +34,9 @@ const ENVIRONMENTS = [
     color: "#4ADE80",
     accent: "rgba(74,222,128,0.08)",
     gradient: "linear-gradient(135deg, rgba(0,20,10,0.8) 0%, rgba(0,0,0,0.3) 50%, rgba(0,20,10,0.8) 100%)",
-    url: "https://apps.apple.com/us/app/field-ops-management/id6760951739",
+    url: "https://www.fieldopsmanagement.com/",
     num: "01",
-    previewUrl: "https://apps.apple.com/us/app/field-ops-management/id6760951739",
+    previewUrl: "https://www.fieldopsmanagement.com/",
     previewType: "site" as const,
   },
   {
