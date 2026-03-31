@@ -350,7 +350,8 @@ export default function Portfolio() {
       markActive();
       const dy = touchY - e.touches[0].clientY;
       touchY = e.touches[0].clientY;
-      const delta = (dy / (window.innerHeight * 6)) * videoDuration;
+      /* Touch is 3× more sensitive than wheel — fingers move less distance */
+      const delta = (dy / (window.innerHeight * 2)) * videoDuration;
       if (dy !== 0) scrollDirRef.current = dy > 0 ? 1 : -1;
       targetTimeRef.current += delta;
       targetTimeRef.current = ((targetTimeRef.current % videoDuration) + videoDuration) % videoDuration;
@@ -412,9 +413,11 @@ export default function Portfolio() {
       }
     };
 
-    /* Draw video to canvas — smart scaling that keeps character fully visible on any screen.
-       Uses "cover" for width but caps height overflow so head+feet stay in frame.
-       IMPORTANT: No clearRect — drawImage overpaints the same rect to prevent flash. */
+    /* Draw video to canvas — aspect-ratio-aware scaling.
+       - Wide screens (desktop): "contain" + bottom-align (character fits perfectly)
+       - Tall/narrow screens (phone portrait): scale up to fill width, center vertically
+       - Square-ish screens: slight scale-up to fill more space
+       IMPORTANT: No clearRect — drawImage overpaints to prevent flash. */
     const CHAR_CENTER_FRAC = 0.5;
     const drawFrame = (vid: HTMLVideoElement, flip = false) => {
       if (!ctx || !canvas) return;
@@ -422,21 +425,36 @@ export default function Portfolio() {
       const ch = canvas.height;
       const vw = vid.videoWidth || 1;
       const vh = vid.videoHeight || 1;
-      /* Fit strategy: use whichever scale makes the character fill the screen
-         without losing head or feet. Blend between contain and cover:
-         - Always at least fill the height (character visible)
-         - If video is taller than viewport, vertically center with slight bottom bias
-           so feet stay grounded but head isn't cut off */
-      const containScale = Math.min(cw / vw, ch / vh);
-      const coverScale = Math.max(cw / vw, ch / vh);
-      /* Use 90% of the way toward cover — big character, but don't crop aggressively */
-      const scale = containScale + (coverScale - containScale) * 0.85;
+
+      const viewAspect = cw / ch;       // screen aspect ratio
+      const vidAspect = vw / vh;         // video aspect ratio (16:9 = ~1.78)
+
+      let scale: number;
+      let dy: number;
+
+      if (viewAspect >= vidAspect * 0.95) {
+        /* Wide or matching screen (most desktops): contain, bottom-aligned.
+           This is the original behavior — character fits perfectly. */
+        scale = Math.min(cw / vw, ch / vh);
+        const dh = vh * scale;
+        dy = ch - dh; /* bottom-aligned */
+      } else {
+        /* Tall/narrow screen (phones, some laptops): scale to fill width
+           so character isn't tiny. Vertically center with bottom bias. */
+        scale = cw / vw; /* fill width */
+        const dh = vh * scale;
+        if (dh <= ch) {
+          dy = ch - dh; /* fits — bottom-align */
+        } else {
+          /* Overflows vertically: center with 30% top / 70% bottom bias */
+          dy = (ch - dh) * 0.3;
+        }
+      }
+
       const dw = vw * scale;
       const dh = vh * scale;
-      const dx = (cw - dw) / 2; /* horizontally centered */
-      /* Vertical: if video fits, bottom-align. If overflows, bias 35% from top
-         so head is visible but character stays grounded */
-      const dy = dh <= ch ? (ch - dh) : (ch - dh) * 0.35;
+      const dx = (cw - dw) / 2;
+
       if (flip) {
         const charScreenX = dx + CHAR_CENTER_FRAC * vw * scale;
         ctx.save();
@@ -803,17 +821,28 @@ export default function Portfolio() {
 
             if (targetRate > 0.05) {
               const clampedRate = Math.max(targetRate, 0.2);
-              if (Math.abs(clampedRate - lastRate) > 0.08 || v.paused) {
-                v.playbackRate = clampedRate;
-                lastRate = clampedRate;
+              /* On low-end devices, use direct seeking instead of playbackRate
+                 (variable playbackRate can stall weak decoders) */
+              if (tier === "low") {
+                /* Seek-based: set currentTime directly each frame */
+                if (!v.paused) v.pause();
+                const seekStep = clampedRate * (1 / 60) * scrollDirRef.current;
+                let newTime = v.currentTime + seekStep;
+                newTime = ((newTime % videoDuration) + videoDuration) % videoDuration;
+                v.currentTime = newTime;
+              } else {
+                if (Math.abs(clampedRate - lastRate) > 0.08 || v.paused) {
+                  v.playbackRate = clampedRate;
+                  lastRate = clampedRate;
+                }
+                if (v.paused) v.play().catch(() => {});
               }
-              if (v.paused) v.play().catch(() => {});
             } else {
               scrollVelocityRef.current = 0;
               if (!v.paused) v.pause();
             }
 
-            /* Paint only on new video frames */
+            /* Paint on new video frames — also paint after seek on low tier */
             if (v.readyState >= 2 && v.currentTime !== lastPaintedTime.current) {
               drawFrame(v, scrollDirRef.current < 0);
               lastPaintedTime.current = v.currentTime;
@@ -1193,9 +1222,9 @@ export default function Portfolio() {
         }}
       />
 
-      {/* ═══ LIGHTNING FLASH — cinematic idle transition mask ═══ */}
+      {/* ═══ LIGHTNING FLASH — cinematic idle transition mask (high tier only) ═══ */}
       <AnimatePresence>
-        {showLightningFlash && (
+        {showLightningFlash && perfTierRef.current === "high" && (
           <motion.div
             key="lightning-flash"
             initial={{ opacity: 1 }}
