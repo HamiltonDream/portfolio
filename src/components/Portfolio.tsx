@@ -461,33 +461,7 @@ export default function Portfolio() {
         ctx.drawImage(vid, dx, dy, dw, dh);
       }
 
-      /* Edge fade: frosted glass effect over edges to hide video bounds */
-      const dp = Math.min(window.devicePixelRatio || 1, 2);
-      const edgeW = Math.min(120 * dp, cw * 0.12); /* responsive edge width */
-      const edgeT = Math.min(80 * dp, ch * 0.08);
-      /* Left edge — soft glass fade */
-      const gL = ctx.createLinearGradient(Math.max(dx, 0), 0, Math.max(dx, 0) + edgeW, 0);
-      gL.addColorStop(0, "rgba(0,0,0,0.85)");
-      gL.addColorStop(0.5, "rgba(0,0,0,0.3)");
-      gL.addColorStop(1, "rgba(0,0,0,0)");
-      ctx.fillStyle = gL;
-      ctx.fillRect(Math.max(dx, 0), Math.max(dy, 0), edgeW, dh);
-      /* Right edge */
-      const rEdge = Math.min(dx + dw, cw);
-      const gR = ctx.createLinearGradient(rEdge, 0, rEdge - edgeW, 0);
-      gR.addColorStop(0, "rgba(0,0,0,0.85)");
-      gR.addColorStop(0.5, "rgba(0,0,0,0.3)");
-      gR.addColorStop(1, "rgba(0,0,0,0)");
-      ctx.fillStyle = gR;
-      ctx.fillRect(rEdge - edgeW, Math.max(dy, 0), edgeW, dh);
-      /* Top edge */
-      const tEdge = Math.max(dy, 0);
-      const gT = ctx.createLinearGradient(0, tEdge, 0, tEdge + edgeT);
-      gT.addColorStop(0, "rgba(0,0,0,0.8)");
-      gT.addColorStop(0.5, "rgba(0,0,0,0.25)");
-      gT.addColorStop(1, "rgba(0,0,0,0)");
-      ctx.fillStyle = gT;
-      ctx.fillRect(Math.max(dx, 0), tEdge, dw, edgeT);
+
     };
 
     /* Track last set playbackRate to avoid thrashing */
@@ -1639,7 +1613,6 @@ export default function Portfolio() {
               cursor: "pointer",
               transition: "all 0.3s",
               display: "flex", alignItems: "center", justifyContent: "center",
-              backdropFilter: "blur(12px)",
               transform: autoWalkDir === -1 ? "scaleX(-1)" : "none",
             }}
             title={autoWalkDir === 1 ? "Reverse" : "Forward"}
@@ -1659,7 +1632,6 @@ export default function Portfolio() {
             letterSpacing: "0.2em",
             cursor: "pointer",
             transition: "all 0.4s",
-            backdropFilter: "blur(12px)",
             display: "flex", alignItems: "center", gap: 8,
           }}
         >{autoWalk ? "■ STOP" : "▶ AUTO WALK"}</button>
