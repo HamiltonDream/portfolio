@@ -38,6 +38,11 @@ yarn-error.log*
 
 # typescript
 *.tsbuildinfo
+
+# unused large video source files
+public/WalkingNew.mov
+public/WalkingNew.webm
+public/walk-loop.mp4
 next-env.d.ts
 
 .vercel

@@ -297,6 +297,7 @@ export default function Portfolio() {
   }, [videoReady]);
 
   /* Size canvases to viewport (capped DPR for performance) */
+  const resizeCountRef = useRef(0);
   useEffect(() => {
     const resize = () => {
       const tier = perfTierRef.current;
@@ -312,6 +313,11 @@ export default function Portfolio() {
           c.style.height = h + "px";
         }
       });
+      /* Force the render loop to repaint by invalidating last painted time */
+      lastPaintedTime.current = -1;
+      resizeCountRef.current++;
+      /* Update mobile state on resize */
+      setIsMobile(w < 768);
     };
     resize();
     window.addEventListener("resize", resize);
@@ -508,7 +514,7 @@ export default function Portfolio() {
     };
     const smokePuffs: SmokePuff[] = [];
     const tier = perfTierRef.current;
-    const SMOKE_COUNT = tier === "low" ? 12 : tier === "mid" ? 25 : 50;
+    const SMOKE_COUNT = tier === "low" ? 25 : tier === "mid" ? 40 : 50;
     const spawnSmoke = (): SmokePuff => {
       const fw = fCanvas?.width || 1920;
       const fh = fCanvas?.height || 1080;
@@ -599,7 +605,7 @@ export default function Portfolio() {
         behind: Math.random() < 0.4, /* ~40% of particles go behind */
       };
     };
-    const DUST_COUNT = tier === "low" ? 15 : tier === "mid" ? 35 : 80;
+    const DUST_COUNT = tier === "low" ? 40 : tier === "mid" ? 60 : 80;
     for (let i = 0; i < DUST_COUNT; i++) particles.push(spawnDust());
 
     const drawParticles = () => {
@@ -656,13 +662,11 @@ export default function Portfolio() {
         const a = lifeFade * p.opacity * particleFade;
         if (a < 0.001) continue;
 
-        /* Soft glow halo — skip on low tier (expensive overdraw) */
-        if (tier === "high") {
-          pCtx.beginPath();
-          pCtx.arc(p.x, p.y, p.size * 4, 0, Math.PI * 2);
-          pCtx.fillStyle = `rgba(255,255,255,${(a * 0.08).toFixed(4)})`;
-          pCtx.fill();
-        }
+        /* Soft glow halo */
+        pCtx.beginPath();
+        pCtx.arc(p.x, p.y, p.size * 4, 0, Math.PI * 2);
+        pCtx.fillStyle = `rgba(255,255,255,${(a * 0.08).toFixed(4)})`;
+        pCtx.fill();
 
         /* Core dot */
         pCtx.beginPath();
@@ -675,18 +679,9 @@ export default function Portfolio() {
     const loop = () => {
       const v = videoRef.current;
 
-      /* ═══ SMOKE + PARTICLES — throttled on low-end devices ═══ */
-      if (tier === "low") {
-        /* Low: skip smoke entirely, particles every 3rd frame */
-        if (frameCount % 3 === 0) drawParticles();
-      } else if (tier === "mid") {
-        /* Mid: smoke every other frame, particles every frame */
-        if (frameCount % 2 === 0) drawSmoke();
-        drawParticles();
-      } else {
-        drawSmoke();
-        drawParticles();
-      }
+      /* ═══ SMOKE + PARTICLES — every frame ═══ */
+      drawSmoke();
+      drawParticles();
 
       /* ═══ IDLE VIDEO STATE: draw idle clips when not walking ═══ */
       const iState = idleStateRef.current;
@@ -821,22 +816,11 @@ export default function Portfolio() {
 
             if (targetRate > 0.05) {
               const clampedRate = Math.max(targetRate, 0.2);
-              /* On low-end devices, use direct seeking instead of playbackRate
-                 (variable playbackRate can stall weak decoders) */
-              if (tier === "low") {
-                /* Seek-based: set currentTime directly each frame */
-                if (!v.paused) v.pause();
-                const seekStep = clampedRate * (1 / 60) * scrollDirRef.current;
-                let newTime = v.currentTime + seekStep;
-                newTime = ((newTime % videoDuration) + videoDuration) % videoDuration;
-                v.currentTime = newTime;
-              } else {
-                if (Math.abs(clampedRate - lastRate) > 0.08 || v.paused) {
-                  v.playbackRate = clampedRate;
-                  lastRate = clampedRate;
-                }
-                if (v.paused) v.play().catch(() => {});
+              if (Math.abs(clampedRate - lastRate) > 0.08 || v.paused) {
+                v.playbackRate = clampedRate;
+                lastRate = clampedRate;
               }
+              if (v.paused) v.play().catch(() => {});
             } else {
               scrollVelocityRef.current = 0;
               if (!v.paused) v.pause();
@@ -1160,12 +1144,13 @@ export default function Portfolio() {
         }}
       />
 
-      {/* ═══ FROSTED GLASS EDGES — blur on high-end only, gradient fallback on others ═══ */}
+      {/* ═══ FROSTED GLASS EDGES — blur everything at screen edges ═══ */}
       {/* Left glass edge */}
       <div style={{
         position: "fixed", top: 0, left: 0, bottom: 0, width: isMobile ? "60px" : "120px",
         zIndex: 8, pointerEvents: "none",
-        ...(perfTierRef.current === "high" ? { backdropFilter: "blur(12px) saturate(1.2)", WebkitBackdropFilter: "blur(12px) saturate(1.2)" } : {}),
+        backdropFilter: "blur(12px) saturate(1.2)",
+        WebkitBackdropFilter: "blur(12px) saturate(1.2)",
         background: "linear-gradient(to right, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.2) 40%, transparent 100%)",
         maskImage: "linear-gradient(to right, black 0%, black 30%, transparent 100%)",
         WebkitMaskImage: "linear-gradient(to right, black 0%, black 30%, transparent 100%)",
@@ -1174,7 +1159,8 @@ export default function Portfolio() {
       <div style={{
         position: "fixed", top: 0, right: 0, bottom: 0, width: isMobile ? "60px" : "120px",
         zIndex: 8, pointerEvents: "none",
-        ...(perfTierRef.current === "high" ? { backdropFilter: "blur(12px) saturate(1.2)", WebkitBackdropFilter: "blur(12px) saturate(1.2)" } : {}),
+        backdropFilter: "blur(12px) saturate(1.2)",
+        WebkitBackdropFilter: "blur(12px) saturate(1.2)",
         background: "linear-gradient(to left, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.2) 40%, transparent 100%)",
         maskImage: "linear-gradient(to left, black 0%, black 30%, transparent 100%)",
         WebkitMaskImage: "linear-gradient(to left, black 0%, black 30%, transparent 100%)",
@@ -1183,7 +1169,8 @@ export default function Portfolio() {
       <div style={{
         position: "fixed", top: 0, left: 0, right: 0, height: isMobile ? "40px" : "70px",
         zIndex: 8, pointerEvents: "none",
-        ...(perfTierRef.current === "high" ? { backdropFilter: "blur(8px) saturate(1.2)", WebkitBackdropFilter: "blur(8px) saturate(1.2)" } : {}),
+        backdropFilter: "blur(8px) saturate(1.2)",
+        WebkitBackdropFilter: "blur(8px) saturate(1.2)",
         background: "linear-gradient(to bottom, rgba(0,0,0,0.5) 0%, transparent 100%)",
         maskImage: "linear-gradient(to bottom, black 0%, black 20%, transparent 100%)",
         WebkitMaskImage: "linear-gradient(to bottom, black 0%, black 20%, transparent 100%)",
@@ -1222,9 +1209,9 @@ export default function Portfolio() {
         }}
       />
 
-      {/* ═══ LIGHTNING FLASH — cinematic idle transition mask (high tier only) ═══ */}
+      {/* ═══ LIGHTNING FLASH — cinematic idle transition mask ═══ */}
       <AnimatePresence>
-        {showLightningFlash && perfTierRef.current === "high" && (
+        {showLightningFlash && (
           <motion.div
             key="lightning-flash"
             initial={{ opacity: 1 }}
@@ -1405,38 +1392,37 @@ export default function Portfolio() {
       }} />
 
 
-      {/* Volumetric light shaft + atmospheric haze — high/mid only (animated divs) */}
-      {perfTierRef.current !== "low" && <>
-        <motion.div
-          animate={{ opacity: [0.03, 0.08, 0.03] }}
-          transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
-          style={{
-            position: "fixed", inset: 0,
-            zIndex: 3, pointerEvents: "none",
-            background: "linear-gradient(135deg, transparent 20%, rgba(255,255,255,0.02) 40%, rgba(255,255,255,0.04) 50%, rgba(255,255,255,0.02) 60%, transparent 80%)",
-            transform: "skewX(-15deg)",
-          }}
-        />
-        <motion.div
-          animate={{ opacity: [0.015, 0.04, 0.015] }}
-          transition={{ duration: 12, repeat: Infinity, ease: "easeInOut" }}
-          style={{
-            position: "fixed", inset: 0,
-            zIndex: 8, pointerEvents: "none",
-            background: `radial-gradient(ellipse at 50% 70%, ${blendedColor}08 0%, transparent 60%)`,
-            transition: "background 1.5s ease",
-          }}
-        />
-      </>}
-      {/* Persistent film grain — high tier only (SVG filter triggers GPU repaints) */}
-      {perfTierRef.current === "high" && <div style={{
+      {/* Volumetric light shaft — diagonal from upper right */}
+      <motion.div
+        animate={{ opacity: [0.03, 0.08, 0.03] }}
+        transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
+        style={{
+          position: "fixed", inset: 0,
+          zIndex: 3, pointerEvents: "none",
+          background: "linear-gradient(135deg, transparent 20%, rgba(255,255,255,0.02) 40%, rgba(255,255,255,0.04) 50%, rgba(255,255,255,0.02) 60%, transparent 80%)",
+          transform: "skewX(-15deg)",
+        }}
+      />
+      {/* Atmospheric haze — tinted with environment color */}
+      <motion.div
+        animate={{ opacity: [0.015, 0.04, 0.015] }}
+        transition={{ duration: 12, repeat: Infinity, ease: "easeInOut" }}
+        style={{
+          position: "fixed", inset: 0,
+          zIndex: 8, pointerEvents: "none",
+          background: `radial-gradient(ellipse at 50% 70%, ${blendedColor}08 0%, transparent 60%)`,
+          transition: "background 1.5s ease",
+        }}
+      />
+      {/* Persistent film grain */}
+      <div style={{
         position: "fixed", inset: 0,
         zIndex: 8, pointerEvents: "none",
         mixBlendMode: "overlay",
         opacity: 0.03,
         backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`,
         backgroundSize: "200px 200px",
-      }} />}
+      }} />
 
       {/* ═══ PROGRESS BAR ═══ */}
       <div style={{
