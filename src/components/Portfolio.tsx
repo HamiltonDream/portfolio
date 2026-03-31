@@ -432,30 +432,18 @@ export default function Portfolio() {
       const vw = vid.videoWidth || 1;
       const vh = vid.videoHeight || 1;
 
-      const viewAspect = cw / ch;       // screen aspect ratio
-      const vidAspect = vw / vh;         // video aspect ratio (16:9 = ~1.78)
+      /* Scale so the character is always prominent:
+         - On matching/wide screens: contain fits naturally.
+         - On tall/narrow screens (phones): scale up so the video
+           fills at least 90% of screen height, cropping sides. */
+      const containScale = Math.min(cw / vw, ch / vh);
+      const minHeightScale = (ch * 0.9) / vh;
+      let scale = Math.max(containScale, minHeightScale);
 
-      let scale: number;
-      let dy: number;
-
-      if (viewAspect >= vidAspect * 0.95) {
-        /* Wide or matching screen (most desktops): contain, bottom-aligned.
-           This is the original behavior — character fits perfectly. */
-        scale = Math.min(cw / vw, ch / vh);
-        const dh = vh * scale;
-        dy = ch - dh; /* bottom-aligned */
-      } else {
-        /* Tall/narrow screen (phones, some laptops): scale to fill width
-           so character isn't tiny. Vertically center with bottom bias. */
-        scale = cw / vw; /* fill width */
-        const dh = vh * scale;
-        if (dh <= ch) {
-          dy = ch - dh; /* fits — bottom-align */
-        } else {
-          /* Overflows vertically: center with 30% top / 70% bottom bias */
-          dy = (ch - dh) * 0.3;
-        }
-      }
+      const dh = vh * scale;
+      /* Bottom-aligned: dy is 0 or negative (crops top on tall screens,
+         which is just empty space above the character — head stays visible) */
+      let dy = ch - dh;
 
       const dw = vw * scale;
       const dh = vh * scale;
@@ -1144,37 +1132,7 @@ export default function Portfolio() {
         }}
       />
 
-      {/* ═══ FROSTED GLASS EDGES — blur everything at screen edges ═══ */}
-      {/* Left glass edge */}
-      <div style={{
-        position: "fixed", top: 0, left: 0, bottom: 0, width: isMobile ? "60px" : "120px",
-        zIndex: 8, pointerEvents: "none",
-        backdropFilter: "blur(12px) saturate(1.2)",
-        WebkitBackdropFilter: "blur(12px) saturate(1.2)",
-        background: "linear-gradient(to right, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.2) 40%, transparent 100%)",
-        maskImage: "linear-gradient(to right, black 0%, black 30%, transparent 100%)",
-        WebkitMaskImage: "linear-gradient(to right, black 0%, black 30%, transparent 100%)",
-      }} />
-      {/* Right glass edge */}
-      <div style={{
-        position: "fixed", top: 0, right: 0, bottom: 0, width: isMobile ? "60px" : "120px",
-        zIndex: 8, pointerEvents: "none",
-        backdropFilter: "blur(12px) saturate(1.2)",
-        WebkitBackdropFilter: "blur(12px) saturate(1.2)",
-        background: "linear-gradient(to left, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.2) 40%, transparent 100%)",
-        maskImage: "linear-gradient(to left, black 0%, black 30%, transparent 100%)",
-        WebkitMaskImage: "linear-gradient(to left, black 0%, black 30%, transparent 100%)",
-      }} />
-      {/* Top glass edge */}
-      <div style={{
-        position: "fixed", top: 0, left: 0, right: 0, height: isMobile ? "40px" : "70px",
-        zIndex: 8, pointerEvents: "none",
-        backdropFilter: "blur(8px) saturate(1.2)",
-        WebkitBackdropFilter: "blur(8px) saturate(1.2)",
-        background: "linear-gradient(to bottom, rgba(0,0,0,0.5) 0%, transparent 100%)",
-        maskImage: "linear-gradient(to bottom, black 0%, black 20%, transparent 100%)",
-        WebkitMaskImage: "linear-gradient(to bottom, black 0%, black 20%, transparent 100%)",
-      }} />
+
 
       {/* ═══ CANVAS (character — blend-mode makes black transparent) ═══ */}
       <canvas
